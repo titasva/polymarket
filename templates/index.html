@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Tracker</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="header-inner">
+      <h1>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+        Polymarket Tracker
+      </h1>
+      <span id="last-refresh" class="dim">–</span>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <!-- ── Left panel: traders ── -->
+    <aside class="sidebar">
+      <div class="panel-header">
+        <h2>Traders</h2>
+        <button id="btn-add-trader" class="btn-icon" title="Add trader">+</button>
+      </div>
+
+      <!-- Add trader form (hidden by default) -->
+      <div id="add-form" class="add-form hidden">
+        <input id="input-address" type="text" placeholder="0x… wallet address" autocomplete="off" spellcheck="false" />
+        <div class="add-form-actions">
+          <button id="btn-submit-add" class="btn-primary">Track</button>
+          <button id="btn-cancel-add" class="btn-ghost">Cancel</button>
+        </div>
+        <p id="add-error" class="error-msg hidden"></p>
+      </div>
+
+      <!-- Trader list -->
+      <ul id="trader-list" class="trader-list"></ul>
+    </aside>
+
+    <!-- ── Main panel: trades ── -->
+    <main class="main">
+
+      <!-- Filter bar -->
+      <div class="filter-bar">
+        <span id="filter-label">All traders</span>
+        <div class="filter-controls">
+          <select id="filter-side">
+            <option value="">All sides</option>
+            <option value="BUY">Buy</option>
+            <option value="SELL">Sell</option>
+          </select>
+          <button id="btn-refresh-all" class="btn-ghost btn-sm">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- Trade feed -->
+      <div id="trade-feed" class="trade-feed">
+        <div class="empty-state">Add a trader on the left to get started.</div>
+      </div>
+
+      <!-- Load more -->
+      <div id="load-more-wrap" class="load-more-wrap hidden">
+        <button id="btn-load-more" class="btn-ghost">Load more</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
