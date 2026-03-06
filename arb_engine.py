@@ -31,15 +31,94 @@ def _tokens(s: str) -> list[str]:
     return [t for t in _norm(s).split() if t not in _STOPWORDS and len(t) > 2]
 
 
-def _seq_sim(a: str, b: str) -> float:
-    return SequenceMatcher(None, _norm(a), _norm(b)).ratio()
+# ── H2H detection & team extraction ──────────────────────────────────────────
+
+# Patterns that indicate a head-to-head matchup and capture two sides
+_H2H_PATTERNS = [
+    # "X vs Y" / "X v Y" / "X v. Y"
+    r'(.+?)\s+vs?\.?\s+(.+?)(?:\s*[-–|?:\.]|\s*$)',
+    # "Will X beat/defeat Y?"
+    r'(?:will|can)\s+(.+?)\s+(?:beat|defeat|win (?:against|over|vs?\.?))\s+(.+?)(?:\?|$)',
+    # "X to beat/defeat Y"
+    r'(.+?)\s+to\s+(?:beat|defeat|win (?:against|over|vs?\.?))\s+(.+?)(?:\?|$)',
+    # "X or Y" in "who/which will win" context
+    r'(?:who|which).+?:\s*(.+?)\s+or\s+(.+?)(?:\?|$)',
+]
 
 
-def _word_overlap(a: str, b: str) -> float:
-    wa, wb = set(_tokens(a)), set(_tokens(b))
-    if not wa or not wb:
+def extract_h2h_teams(question: str) -> tuple[str, str] | None:
+    """
+    If the question describes a head-to-head matchup, extract the two sides.
+    Returns None for futures, props, and non-h2h markets.
+
+    Examples that MATCH:
+      "Lakers vs Celtics" → ("Lakers", "Celtics")
+      "Will Arsenal beat Chelsea on March 10?" → ("Arsenal", "Chelsea")
+
+    Examples that DON'T match (returns None):
+      "Will the Kings make the NHL Playoffs?"
+      "Who will win the Super Bowl?"
+      "Will Ohtani hit 50 HRs?"
+    """
+    q = question.strip()
+    for pat in _H2H_PATTERNS:
+        m = re.search(pat, q, re.IGNORECASE)
+        if m:
+            t1 = m.group(1).strip()
+            t2 = m.group(2).strip().rstrip("?").strip()
+            # Strip leading "the"
+            for prefix in ("will ", "the ", "can "):
+                if t1.lower().startswith(prefix):
+                    t1 = t1[len(prefix):]
+                if t2.lower().startswith(prefix):
+                    t2 = t2[len(prefix):]
+            t1, t2 = t1.strip(), t2.strip()
+            if t1 and t2:
+                return t1, t2
+    return None
+
+
+# ── Team name similarity ─────────────────────────────────────────────────────
+
+def _last_word(s: str) -> str:
+    """Get the distinguishing team name (last word of multi-word names)."""
+    words = _norm(s).split()
+    return words[-1] if words else ""
+
+
+def _team_sim(extracted: str, official: str) -> float:
+    """
+    Compare an extracted team name from a PM question against an official
+    sportsbook team name.
+
+    Heavily weights the *distinguishing* part of the name:
+      "Los Angeles Kings" vs "Los Angeles FC" → low score (Kings ≠ FC)
+      "Arsenal" vs "Arsenal" → 1.0
+    """
+    ext = _norm(extracted)
+    off = _norm(official)
+
+    if ext == off:
+        return 1.0
+
+    ext_words = ext.split()
+    off_words = off.split()
+    if not ext_words or not off_words:
         return 0.0
-    return len(wa & wb) / len(wa | wb)
+
+    # 1. Last-word similarity (the actual team name: "Kings", "Lakers", "Arsenal")
+    last_sim = SequenceMatcher(None, _last_word(ext), _last_word(off)).ratio()
+
+    # 2. Full sequence similarity
+    full_sim = SequenceMatcher(None, ext, off).ratio()
+
+    # 3. Word set overlap
+    ext_set, off_set = set(ext_words), set(off_words)
+    union = ext_set | off_set
+    overlap = len(ext_set & off_set) / len(union) if union else 0.0
+
+    # Last word is the most discriminative signal
+    return last_sim * 0.50 + full_sim * 0.30 + overlap * 0.20
 
 
 # ── Event matching ─────────────────────────────────────────────────────────────
@@ -48,61 +127,62 @@ def match_score(question: str, home_team: str, away_team: str) -> float:
     """
     Return a 0–1 confidence score for how well (home_team, away_team) matches
     the Polymarket question text.
+
+    Returns 0.0 immediately if the PM question is not a head-to-head market.
+    Requires BOTH extracted teams to individually match (not just one).
     """
-    q_tokens = set(_tokens(question))
-    if not q_tokens:
+    teams = extract_h2h_teams(question)
+    if teams is None:
+        return 0.0   # futures, props, non-h2h → never match an h2h event
+
+    pm_t1, pm_t2 = teams
+
+    # Try both orientations: pm_t1=home or pm_t1=away
+    fwd_home = _team_sim(pm_t1, home_team)
+    fwd_away = _team_sim(pm_t2, away_team)
+    fwd = (fwd_home + fwd_away) / 2.0
+
+    rev_home = _team_sim(pm_t2, home_team)
+    rev_away = _team_sim(pm_t1, away_team)
+    rev = (rev_home + rev_away) / 2.0
+
+    if fwd >= rev:
+        best, s1, s2 = fwd, fwd_home, fwd_away
+    else:
+        best, s1, s2 = rev, rev_home, rev_away
+
+    # BOTH teams must match reasonably — one good match isn't enough
+    if min(s1, s2) < 0.35:
         return 0.0
 
-    combined = home_team + " " + away_team
-
-    # 1. How many PM tokens appear in the event team names?
-    ev_tokens = set(_tokens(combined))
-    token_hit = len(q_tokens & ev_tokens) / len(q_tokens)
-
-    # 2. Sequence similarity between full strings
-    seq = _seq_sim(question, home_team + " vs " + away_team)
-
-    # 3. Word-set Jaccard
-    jaccard = _word_overlap(question, combined)
-
-    # Weighted combination
-    score = token_hit * 0.50 + seq * 0.25 + jaccard * 0.25
-    return min(score, 1.0)
+    return best
 
 
 def guess_yes_is_home(question: str, home_team: str, away_team: str) -> bool:
     """
     Heuristic: does PM YES correspond to the home team winning?
-    Returns True if PM question appears to reference the home team first/more.
-    This is always overrideable via the manual match UI.
+    Returns True if the PM question's first-mentioned team maps to home.
+    Always overrideable via the manual match UI.
     """
-    q_tok = _tokens(question)
-    home_tok = set(_tokens(home_team))
-    away_tok = set(_tokens(away_team))
+    teams = extract_h2h_teams(question)
+    if teams is None:
+        return True
 
-    home_hits = sum(1 for t in q_tok if t in home_tok)
-    away_hits = sum(1 for t in q_tok if t in away_tok)
+    pm_t1, pm_t2 = teams
 
-    if home_hits != away_hits:
-        return home_hits > away_hits
+    # Does team1 match home or away better?
+    sim_t1_home = _team_sim(pm_t1, home_team)
+    sim_t1_away = _team_sim(pm_t1, away_team)
 
-    # Fall back to positional: whichever team appears first in the question
-    q_norm = _norm(question)
-    home_pos = min(
-        (q_norm.find(t) for t in home_tok if t in q_norm),
-        default=9999,
-    )
-    away_pos = min(
-        (q_norm.find(t) for t in away_tok if t in q_norm),
-        default=9999,
-    )
-    return home_pos <= away_pos
+    # First-mentioned team in PM question = the YES outcome team
+    # If that team is the home team → YES is home
+    return sim_t1_home >= sim_t1_away
 
 
 def find_best_match(
     question: str,
     events: list[dict],
-    threshold: float = 0.38,
+    threshold: float = 0.50,
 ) -> tuple[dict | None, float, bool]:
     """
     Search `events` for the best match for a PM question.
