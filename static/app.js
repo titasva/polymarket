@@ -60,6 +60,7 @@ document.querySelectorAll(".nav-tab, .tab-link").forEach(btn => {
     if (!panes[tab]) return;
     Object.values(panes).forEach(p => p.classList.remove("active"));
     document.querySelectorAll(".nav-tab").forEach(b => b.classList.remove("active"));
+    panes[tab].classList.remove("hidden");
     panes[tab].classList.add("active");
     document.querySelector(`.nav-tab[data-tab="${tab}"]`)?.classList.add("active");
     if (tab === "arb")      loadArb();
