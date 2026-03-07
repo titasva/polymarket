@@ -7,10 +7,11 @@ and writes results to SQLite.
 Run standalone:  python fetcher.py
 """
 
+import json
 import logging
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 import schedule
@@ -91,11 +92,18 @@ def fetch_pm_markets() -> list[dict]:
 
 
 def _parse_pm(m: dict) -> dict | None:
-    prices = m.get("outcomePrices") or ["0.5", "0.5"]
+    raw = m.get("outcomePrices") or ["0.5", "0.5"]
+    # Gamma API often returns outcomePrices as a JSON-encoded string, e.g.
+    # "[\"0.65\", \"0.35\"]" — parse it if so.
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            raw = ["0.5", "0.5"]
     try:
-        yes = float(prices[0])
-        no  = float(prices[1]) if len(prices) > 1 else round(1 - yes, 6)
-    except (ValueError, TypeError):
+        yes = float(raw[0])
+        no  = float(raw[1]) if len(raw) > 1 else round(1 - yes, 6)
+    except (ValueError, TypeError, IndexError):
         yes, no = 0.5, 0.5
 
     tags = m.get("tags") or []
@@ -108,13 +116,23 @@ def _parse_pm(m: dict) -> dict | None:
     if not mid:
         return None
 
+    end_date = m.get("endDate", "")
+    # Drop markets that have already closed
+    if end_date:
+        try:
+            ed = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            if ed <= datetime.now(timezone.utc):
+                return None
+        except ValueError:
+            pass
+
     return {
-        "id":       mid,
-        "question": m.get("question", ""),
+        "id":        mid,
+        "question":  m.get("question", ""),
         "yes_price": yes,
         "no_price":  no,
         "volume":    float(m.get("volume") or 0),
-        "end_date":  m.get("endDate", ""),
+        "end_date":  end_date,
         "slug":      m.get("slug", ""),
         "category":  cat,
     }
@@ -164,6 +182,16 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
 
 
 def _parse_odds_event(ev: dict, sport: str) -> list[dict]:
+    # Skip events that have already started
+    commence = ev.get("commence_time", "")
+    if commence:
+        try:
+            ct = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+            if ct <= datetime.now(timezone.utc):
+                return []
+        except ValueError:
+            pass
+
     results = []
     home = ev.get("home_team", "")
     away = ev.get("away_team", "")
