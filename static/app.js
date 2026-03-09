@@ -1,466 +1,406 @@
 "use strict";
 
-/* ── Utility ─────────────────────────────────────────────────────────────── */
+/* ── Utilities ───────────────────────────────────────────────────────────── */
 
 function esc(s) {
   if (s == null) return "";
   return String(s)
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
-function pct(v, decimals = 1) {
-  if (v == null) return "–";
-  return (v * 100).toFixed(decimals) + "%";
-}
-
-function dec(v, d = 2) {
-  if (v == null || v === 0) return "–";
-  return Number(v).toFixed(d);
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function money(v) {
   if (v == null) return "–";
-  return "$" + Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+  return "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
-function relTime(isoStr) {
-  if (!isoStr) return "–";
-  const diff = Math.floor((Date.now() - new Date(isoStr + "Z").getTime()) / 1000);
-  if (diff < 0)    return "in the future";
-  if (diff < 60)   return diff + "s ago";
-  if (diff < 3600) return Math.floor(diff / 60) + "m ago";
-  if (diff < 86400)return Math.floor(diff / 3600) + "h ago";
-  return Math.floor(diff / 86400) + "d ago";
+function usdc(v) {
+  if (v == null) return "–";
+  return "$" + Number(v).toFixed(2);
 }
 
-function shortDate(isoStr) {
-  if (!isoStr) return "";
-  try { return new Date(isoStr).toLocaleDateString(); } catch { return ""; }
+function relTime(iso) {
+  if (!iso) return "";
+  const s = Math.floor((Date.now() - new Date(iso + (iso.includes("Z") ? "" : "Z")).getTime()) / 1000);
+  if (s < 0)     return "just now";
+  if (s < 60)    return s + "s ago";
+  if (s < 3600)  return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
 }
 
-async function apiFetch(path, opts) {
+function fmtDate(iso) {
+  if (!iso) return "–";
+  try {
+    const d = new Date(iso.includes("Z") || iso.includes("+") ? iso : iso + "Z");
+    return d.toLocaleString(undefined, {
+      month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch (_) { return iso; }
+}
+
+async function api(path, opts) {
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
 
-/* ── Tab switching ──────────────────────────────────────────────────────── */
-
-const panes = {
-  arb:      document.getElementById("tab-arb"),
-  markets:  document.getElementById("tab-markets"),
-  settings: document.getElementById("tab-settings"),
-};
-
-document.querySelectorAll(".nav-tab, .tab-link").forEach(btn => {
-  btn.addEventListener("click", e => {
-    e.preventDefault();
-    const tab = btn.dataset.tab;
-    if (!panes[tab]) return;
-    Object.values(panes).forEach(p => p.classList.remove("active"));
-    document.querySelectorAll(".nav-tab").forEach(b => b.classList.remove("active"));
-    panes[tab].classList.remove("hidden");
-    panes[tab].classList.add("active");
-    document.querySelector(`.nav-tab[data-tab="${tab}"]`)?.classList.add("active");
-    if (tab === "arb")      loadArb();
-    if (tab === "markets")  loadMarkets();
-    if (tab === "settings") loadConfig();
-  });
-});
-
-/* ── Stats bar ──────────────────────────────────────────────────────────── */
-
-async function loadStats() {
-  try {
-    const s = await apiFetch("/api/stats");
-    document.getElementById("stat-markets").textContent  = s.pm_markets ?? "–";
-    document.getElementById("stat-events").textContent   = s.odds_events ?? "–";
-    document.getElementById("stat-matched").textContent  = s.matched_markets ?? "–";
-    document.getElementById("stat-arbs").textContent     = s.arb_opportunities ?? "–";
-    document.getElementById("last-fetch").textContent    =
-      s.last_fetch ? "Updated " + relTime(s.last_fetch) : "Never fetched";
-    const apiEl = document.getElementById("stat-api");
-    if (s.api_remaining != null) {
-      apiEl.textContent = s.api_remaining + " API req left";
-      apiEl.style.color = s.api_remaining < 50 ? "var(--red)" : "var(--text-dim)";
-    }
-  } catch {}
+function edgeColorClass(pct) {
+  if (pct >= 5) return "edge-high";
+  if (pct >= 2) return "edge-mid";
+  return "edge-none";
 }
 
-/* ── Arb table ──────────────────────────────────────────────────────────── */
+function sideBadge(side) {
+  if (!side) return `<span class="side-badge side-none">–</span>`;
+  return `<span class="side-badge ${side === "YES" ? "side-yes" : "side-no"}">${esc(side)}</span>`;
+}
 
-let currentArb = [];
+function betStatusBadge(status) {
+  if (!status) return `<span class="bet-none">–</span>`;
+  if (status === "PLACED") return `<span class="bet-status bet-placed">PLACED</span>`;
+  return `<span class="bet-status bet-failed">FAILED</span>`;
+}
 
-async function loadArb() {
-  const body = document.getElementById("arb-body");
-  body.innerHTML = `<tr><td colspan="11" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
+function confBadge(score) {
+  if (score == null) return "–";
+  const cls = score >= 0.8 ? "conf-high" : score >= 0.6 ? "conf-mid" : "conf-low";
+  return `<span class="conf-dot ${cls}"></span>${(score * 100).toFixed(0)}%`;
+}
 
-  const edge     = parseFloat(document.getElementById("f-edge").value) || 0;
-  const sport    = document.getElementById("f-sport").value.trim();
-  const bk       = document.getElementById("f-bk").value.trim();
-  const arbOnly  = document.getElementById("f-arb-only").checked;
+/* ── Tab switching ───────────────────────────────────────────────────────── */
 
-  let url = `/api/arb?min_edge=${edge}&limit=200`;
-  if (sport)   url += `&sport=${encodeURIComponent(sport)}`;
-  if (bk)      url += `&bookmaker=${encodeURIComponent(bk)}`;
-  if (arbOnly) url += `&only_arb=true`;
+function switchTab(tab) {
+  document.querySelectorAll(".nav-tab").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === tab)
+  );
+  document.querySelectorAll(".tab-pane").forEach(p =>
+    p.classList.toggle("active", p.id === "tab-" + tab)
+  );
+  if (tab === "edges")    loadEdges();
+  if (tab === "bets")     loadBets();
+  if (tab === "markets")  loadMarkets();
+  if (tab === "settings") loadConfig();
+}
 
+document.querySelectorAll(".nav-tab").forEach(btn =>
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab))
+);
+document.querySelectorAll(".tab-link[data-tab]").forEach(a =>
+  a.addEventListener("click", e => { e.preventDefault(); switchTab(a.dataset.tab); })
+);
+
+/* ── Stats bar ───────────────────────────────────────────────────────────── */
+
+async function refreshStats() {
   try {
-    const rows = await apiFetch(url);
-    currentArb = rows;
-    renderArbTable(rows);
-    loadStats();
+    const s = await api("/api/stats");
+    const el = id => document.getElementById(id);
+    el("st-pm").textContent    = s.pm_markets     ?? "–";
+    el("st-ev").textContent    = s.odds_events     ?? "–";
+    el("st-match").textContent = s.matched_markets ?? "–";
+    el("st-edge").textContent  = s.edges_found     ?? "–";
+    el("st-bets").textContent  = s.bets_today      ?? "–";
+    el("st-api").textContent   = s.api_remaining != null ? "API: " + s.api_remaining + " left" : "";
+    el("st-fetch").textContent = s.last_fetch ? "Fetched " + relTime(s.last_fetch) : "";
+  } catch (_) {}
+}
 
-    const banner = document.getElementById("no-key-banner");
-    banner.classList.toggle("hidden", rows.length > 0 || !checkNoKey());
+/* ── Opportunities tab ───────────────────────────────────────────────────── */
+
+async function loadEdges() {
+  const tbody   = document.getElementById("edges-body");
+  const minEdge = parseFloat(document.getElementById("f-edge").value)  || 0;
+  const sport   = document.getElementById("f-sport").value.trim();
+  const bk      = document.getElementById("f-bk").value.trim();
+
+  tbody.innerHTML = `<tr><td colspan="10" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
+
+  const params = new URLSearchParams({ min_edge: minEdge, limit: 200 });
+  if (sport) params.set("sport", sport);
+  if (bk)    params.set("bookmaker", bk);
+
+  let rows;
+  try {
+    rows = await api("/api/edges?" + params);
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="11" class="empty">Error: ${esc(e.message)}</td></tr>`;
-  }
-}
-
-async function checkNoKey() {
-  try {
-    const cfg = await apiFetch("/api/config");
-    return !cfg.odds_api_key_set;
-  } catch { return false; }
-}
-
-function edgeClass(pct) {
-  const v = Math.abs(pct);
-  if (v >= 5)  return "edge-high";
-  if (v >= 2)  return "edge-mid";
-  return "edge-low";
-}
-
-function confDot(score) {
-  const cls = score >= 0.65 ? "high" : score >= 0.45 ? "mid" : "low";
-  return `<span class="conf ${cls}" title="Match confidence: ${(score*100).toFixed(0)}%"></span>`;
-}
-
-function renderArbTable(rows) {
-  const body = document.getElementById("arb-body");
-  if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="11" class="empty">
-      No opportunities found. Try lowering the minimum edge or run a fetch.
-    </td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">Error loading data.</td></tr>`;
     return;
   }
 
-  body.innerHTML = rows.map((r, i) => {
-    const isArb      = !!r.is_arb;
-    const yesEdgePct = ((r.book_yes_implied - r.pm_yes_price) * 100).toFixed(1);
-    const noEdgePct  = ((r.book_no_implied  - r.pm_no_price)  * 100).toFixed(1);
-    const maxEdgePct = (r.max_edge * 100).toFixed(1);
-    const edgeCls    = edgeClass(parseFloat(maxEdgePct));
+  // Key banner
+  try {
+    const cfg = await api("/api/config");
+    document.getElementById("no-key-banner").classList.toggle("hidden", !!cfg.odds_api_key_set);
+  } catch (_) {}
 
-    const pmYesPct   = (r.pm_yes_price * 100).toFixed(1);
-    const pmNoPct    = (r.pm_no_price  * 100).toFixed(1);
-    const bkYesPct   = (r.book_yes_implied * 100).toFixed(1);
-    const bkNoPct    = (r.book_no_implied  * 100).toFixed(1);
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">No edge opportunities found. Try lowering the minimum edge or click Fetch now.</td></tr>`;
+    return;
+  }
 
-    const pmUrl  = `https://polymarket.com/event/${esc(r.slug || "")}`;
-    const orient = r.pm_yes_is_home
-      ? `YES=${esc(r.home_team)}, NO=${esc(r.away_team)}`
-      : `YES=${esc(r.away_team)}, NO=${esc(r.home_team)}`;
+  tbody.innerHTML = rows.map(r => {
+    const hasEdge   = (r.best_edge_pct || 0) >= 2;
+    const eventName = r.home_team && r.away_team
+      ? `${esc(r.home_team)} vs ${esc(r.away_team)}` : "–";
+    const pmYes  = r.yes_price  != null ? (r.yes_price  * 100).toFixed(1) + "%" : "–";
+    const pmNo   = r.no_price   != null ? (r.no_price   * 100).toFixed(1) + "%" : "–";
+    const bkYes  = r.book_yes_implied_pct != null ? r.book_yes_implied_pct.toFixed(1) + "%" : "–";
+    const bkNo   = r.book_no_implied_pct  != null ? r.book_no_implied_pct.toFixed(1)  + "%" : "–";
+    const epct   = r.best_edge_pct || 0;
+    const pmUrl  = r.slug ? `https://polymarket.com/event/${esc(r.slug)}` : null;
+    const qCell  = pmUrl
+      ? `<a class="q-link" href="${pmUrl}" target="_blank">${esc(r.question)}</a>`
+      : esc(r.question);
 
-    const arbBadge = isArb
-      ? `<span class="arb-badge true">✓ ${r.arb_return_pct.toFixed(2)}%</span>`
-      : `<span class="arb-badge soft">edge</span>`;
-
-    const manualTag = r.is_manual ? `<span class="tag" style="margin-left:4px">manual</span>` : "";
-
-    return `<tr class="${isArb ? "is-arb" : ""}" data-idx="${i}">
-      <td class="ev-cell">
-        <div class="ev-teams" title="${esc(r.home_team)} vs ${esc(r.away_team)}">
-          ${esc(r.home_team)} <span style="color:var(--text-dim)">vs</span> ${esc(r.away_team)}
-        </div>
-        <div class="ev-meta">${esc(r.bookmaker)} · ${esc(r.competition)} · ${shortDate(r.commence_time)}</div>
-        <div class="ev-meta" style="color:var(--text-dim);font-size:.68rem">${orient}${manualTag}</div>
-      </td>
+    return `<tr class="${hasEdge ? "has-edge" : ""}">
       <td>
-        <div class="q-text">
-          <a class="q-link" href="${pmUrl}" target="_blank" title="${esc(r.question)}">${esc(r.question)}</a>
-        </div>
-        <div class="ev-meta">${money(r.volume)} vol · ends ${shortDate(r.end_date)}</div>
+        <div class="ev-teams">${eventName}</div>
+        <div class="ev-meta">${esc(r.bookmaker || "")}${r.sport ? " · " + esc(r.sport) : ""}</div>
       </td>
-      <td class="n pm-pct">${pmYesPct}%</td>
-      <td class="n book-pct">${bkYesPct}%
-        <div style="font-size:.68rem;color:var(--text-dim)">${dec(r.book_yes_decimal)}×</div>
-      </td>
-      <td class="n pm-pct">${pmNoPct}%</td>
-      <td class="n book-pct">${bkNoPct}%
-        <div style="font-size:.68rem;color:var(--text-dim)">${dec(r.book_no_decimal)}×</div>
-      </td>
-      <td class="n"><span class="${edgeCls}">${maxEdgePct}%</span></td>
-      <td class="n">${arbBadge}</td>
-      <td><span class="strategy">${esc(r.best_strategy)}</span></td>
-      <td class="n">${confDot(r.match_score || 0)}${((r.match_score || 0)*100).toFixed(0)}%</td>
-      <td><button class="btn-calc" data-idx="${i}">Calc</button></td>
+      <td class="q-cell">${qCell}</td>
+      <td class="n">${pmYes}</td>
+      <td class="n">${bkYes}</td>
+      <td class="n">${pmNo}</td>
+      <td class="n">${bkNo}</td>
+      <td class="n"><span class="edge-val ${edgeColorClass(epct)}">${epct.toFixed(2)}%</span></td>
+      <td class="n">${sideBadge(r.best_side)}</td>
+      <td class="n">${r.today_bet_status ? betStatusBadge(r.today_bet_status) : '<span class="bet-none">–</span>'}</td>
+      <td class="n">${confBadge(r.match_score)}</td>
+    </tr>`;
+  }).join("");
+}
+
+document.getElementById("btn-apply").addEventListener("click", loadEdges);
+["f-edge", "f-sport", "f-bk"].forEach(id => {
+  document.getElementById(id)?.addEventListener("keydown", e => e.key === "Enter" && loadEdges());
+});
+
+document.getElementById("btn-fetch").addEventListener("click", async function () {
+  this.disabled = true;
+  this.innerHTML = `<span class="spinner"></span>Fetching…`;
+  const btn = this;
+  try {
+    await api("/api/fetch", { method: "POST" });
+    setTimeout(async () => {
+      await refreshStats();
+      await loadEdges();
+      btn.disabled = false;
+      btn.textContent = "↻ Fetch now";
+    }, 5000);
+  } catch (_) {
+    btn.disabled = false;
+    btn.textContent = "↻ Fetch now";
+  }
+});
+
+/* ── Bets tab ────────────────────────────────────────────────────────────── */
+
+async function loadBets() {
+  const tbody = document.getElementById("bets-body");
+  tbody.innerHTML = `<tr><td colspan="10" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
+
+  let rows;
+  try {
+    rows = await api("/api/bets?limit=200");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">Error loading bets.</td></tr>`;
+    return;
+  }
+
+  // Summary bar
+  const placed     = rows.filter(b => b.status === "PLACED");
+  const nowDate    = new Date().toDateString();
+  const todayBets  = placed.filter(b => {
+    if (!b.placed_at) return false;
+    const s = b.placed_at;
+    return new Date(s.includes("Z") ? s : s + "Z").toDateString() === nowDate;
+  });
+  const totalStaked = placed.reduce((s, b) => s + (b.size_usdc || 0), 0);
+  const todayStaked = todayBets.reduce((s, b) => s + (b.size_usdc || 0), 0);
+
+  document.getElementById("bets-summary").innerHTML = `
+    <div class="bsum-item">
+      <span class="bsum-label">Total placed</span>
+      <span class="bsum-val bsum-green">${placed.length}</span>
+    </div>
+    <div class="bsum-item">
+      <span class="bsum-label">Today</span>
+      <span class="bsum-val bsum-yellow">${todayBets.length}</span>
+    </div>
+    <div class="bsum-item">
+      <span class="bsum-label">Staked today</span>
+      <span class="bsum-val bsum-green">${usdc(todayStaked)}</span>
+    </div>
+    <div class="bsum-item">
+      <span class="bsum-label">Total staked</span>
+      <span class="bsum-val">${usdc(totalStaked)}</span>
+    </div>
+    <div class="bsum-item">
+      <span class="bsum-label">Failed</span>
+      <span class="bsum-val bsum-red">${rows.filter(b => b.status === "FAILED").length}</span>
+    </div>
+  `;
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">No bets placed yet. Enable auto-betting in Settings and run a fetch.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(b => `
+    <tr>
+      <td>${fmtDate(b.placed_at)}</td>
+      <td><div class="ev-teams">${esc(b.event_name || "–")}</div></td>
+      <td class="q-cell">${esc(b.question || "–")}</td>
+      <td class="n">${sideBadge(b.side)}</td>
+      <td class="n pm-val">${b.pm_price != null ? (b.pm_price * 100).toFixed(1) + "%" : "–"}</td>
+      <td class="n book-val">${b.book_implied != null ? (b.book_implied * 100).toFixed(1) + "%" : "–"}</td>
+      <td class="n"><span class="edge-val ${edgeColorClass(b.edge_pct || 0)}">${(b.edge_pct || 0).toFixed(2)}%</span></td>
+      <td class="n">${usdc(b.size_usdc)}</td>
+      <td class="n">${betStatusBadge(b.status)}</td>
+      <td><span class="order-id" title="${esc(b.order_id || "")}">${esc(b.order_id || "–")}</span></td>
+    </tr>
+  `).join("");
+}
+
+document.getElementById("btn-refresh-bets").addEventListener("click", loadBets);
+
+/* ── Markets tab ─────────────────────────────────────────────────────────── */
+
+async function loadMarkets() {
+  const tbody       = document.getElementById("markets-body");
+  const q           = document.getElementById("m-search").value.trim();
+  const matchedOnly = document.getElementById("m-matched").checked;
+
+  tbody.innerHTML = `<tr><td colspan="8" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
+
+  const params = new URLSearchParams({ limit: 200 });
+  if (q)           params.set("q", q);
+  if (matchedOnly) params.set("matched_only", "true");
+
+  let rows;
+  try {
+    rows = await api("/api/markets?" + params);
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">Error loading markets.</td></tr>`;
+    return;
+  }
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">No markets found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => {
+    const pmUrl  = r.slug ? `https://polymarket.com/event/${esc(r.slug)}` : null;
+    const qCell  = pmUrl
+      ? `<a class="q-link" href="${pmUrl}" target="_blank">${esc(r.question)}</a>`
+      : esc(r.question);
+    const matched = !!r.event_id;
+    const evCell  = matched
+      ? `<span class="tag">${esc(r.bookmaker || "")}</span> ${esc(r.home_team)} vs ${esc(r.away_team)}`
+      : `<span style="color:var(--dim)">–</span>`;
+    const unmatchBtn = matched
+      ? `<button class="btn-unmatch" data-pmid="${esc(r.id)}" title="Remove match">✕</button>`
+      : "";
+    return `<tr>
+      <td class="q-cell">${qCell}</td>
+      <td class="n">${r.yes_price != null ? (r.yes_price * 100).toFixed(1) + "%" : "–"}</td>
+      <td class="n">${r.no_price  != null ? (r.no_price  * 100).toFixed(1) + "%" : "–"}</td>
+      <td class="n">${money(r.volume)}</td>
+      <td>${evCell}</td>
+      <td class="n">${confBadge(r.match_score)}</td>
+      <td><span class="tag">${esc(r.category || "–")}</span></td>
+      <td>${unmatchBtn}</td>
     </tr>`;
   }).join("");
 
-  // Calc button listeners
-  body.querySelectorAll(".btn-calc").forEach(btn => {
-    btn.addEventListener("click", () => openCalc(parseInt(btn.dataset.idx)));
+  tbody.querySelectorAll(".btn-unmatch").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await api(`/api/markets/${encodeURIComponent(btn.dataset.pmid)}/unmatch`, { method: "POST" });
+      loadMarkets();
+    });
   });
 }
 
-/* ── Bet calculator ─────────────────────────────────────────────────────── */
+document.getElementById("m-apply").addEventListener("click", loadMarkets);
+document.getElementById("m-search")?.addEventListener("keydown", e => e.key === "Enter" && loadMarkets());
 
-function openCalc(idx) {
-  const r = currentArb[idx];
-  if (!r) return;
-
-  document.getElementById("calc-panel").classList.remove("hidden");
-  document.getElementById("calc-title").textContent = "Bet Calculator";
-  document.getElementById("calc-event").textContent =
-    `${r.home_team} vs ${r.away_team} (${r.bookmaker})\n${r.question}`;
-
-  function render() {
-    const stake = parseFloat(document.getElementById("calc-stake").value) || 1000;
-    renderCalcResults(r, stake);
-  }
-  document.getElementById("calc-stake").oninput = render;
-  render();
-}
-
-function renderCalcResults(r, stake) {
-  const out = document.getElementById("calc-results");
-
-  // Strategy A: PM YES + Book NO
-  const cost_a   = r.pm_yes_price + r.book_no_implied;
-  const is_a     = cost_a < 1.0;
-  const ret_a    = is_a ? (1 / cost_a - 1) * 100 : 0;
-  const pm_a     = (r.book_no_implied / cost_a) * stake;
-  const book_a   = (r.pm_yes_price    / cost_a) * stake;
-  const profit_a = is_a ? stake * (1 / cost_a - 1) : 0;
-
-  // Strategy B: PM NO + Book YES
-  const cost_b   = r.pm_no_price + r.book_yes_implied;
-  const is_b     = cost_b < 1.0;
-  const ret_b    = is_b ? (1 / cost_b - 1) * 100 : 0;
-  const pm_b     = (r.book_yes_implied / cost_b) * stake;
-  const book_b   = (r.pm_no_price      / cost_b) * stake;
-  const profit_b = is_b ? stake * (1 / cost_b - 1) : 0;
-
-  const yesEdge = ((r.book_yes_implied - r.pm_yes_price) * 100).toFixed(1);
-  const noEdge  = ((r.book_no_implied  - r.pm_no_price)  * 100).toFixed(1);
-
-  out.innerHTML = `
-    <div class="calc-row">
-      <h4>Price snapshot</h4>
-      <div class="calc-line"><span class="lbl">PM YES price</span>
-        <span class="val">${(r.pm_yes_price*100).toFixed(1)}¢</span></div>
-      <div class="calc-line"><span class="lbl">Book YES implied</span>
-        <span class="val">${(r.book_yes_implied*100).toFixed(1)}% (${dec(r.book_yes_decimal)}×)</span></div>
-      <div class="calc-line"><span class="lbl">YES edge (book−PM)</span>
-        <span class="val ${parseFloat(yesEdge)>0?'green':''}">${yesEdge}%</span></div>
-      <div class="calc-line"><span class="lbl">PM NO price</span>
-        <span class="val">${(r.pm_no_price*100).toFixed(1)}¢</span></div>
-      <div class="calc-line"><span class="lbl">Book NO implied</span>
-        <span class="val">${(r.book_no_implied*100).toFixed(1)}% (${dec(r.book_no_decimal)}×)</span></div>
-      <div class="calc-line"><span class="lbl">NO edge (book−PM)</span>
-        <span class="val ${parseFloat(noEdge)>0?'green':''}">${noEdge}%</span></div>
-    </div>
-
-    <div class="calc-row">
-      <h4>Strategy A — BUY PM YES + BET Book NO&nbsp;${is_a?"✓":""}</h4>
-      <div class="calc-line"><span class="lbl">Total implied cost</span>
-        <span class="val ${is_a?'green':'yellow'}">${(cost_a*100).toFixed(2)}%</span></div>
-      <div class="calc-line"><span class="lbl">Stake on PM YES</span>
-        <span class="val">$${pm_a.toFixed(2)}</span></div>
-      <div class="calc-line"><span class="lbl">Stake on Book NO</span>
-        <span class="val">$${book_a.toFixed(2)}</span></div>
-      <div class="calc-line"><span class="lbl">Guaranteed profit</span>
-        <span class="val ${is_a?'green':''}">
-          ${is_a ? "$"+profit_a.toFixed(2)+" ("+ret_a.toFixed(2)+"%)" : "Not a true arb"}
-        </span></div>
-    </div>
-
-    <div class="calc-row">
-      <h4>Strategy B — BUY PM NO + BET Book YES&nbsp;${is_b?"✓":""}</h4>
-      <div class="calc-line"><span class="lbl">Total implied cost</span>
-        <span class="val ${is_b?'green':'yellow'}">${(cost_b*100).toFixed(2)}%</span></div>
-      <div class="calc-line"><span class="lbl">Stake on PM NO</span>
-        <span class="val">$${pm_b.toFixed(2)}</span></div>
-      <div class="calc-line"><span class="lbl">Stake on Book YES</span>
-        <span class="val">$${book_b.toFixed(2)}</span></div>
-      <div class="calc-line"><span class="lbl">Guaranteed profit</span>
-        <span class="val ${is_b?'green':''}">
-          ${is_b ? "$"+profit_b.toFixed(2)+" ("+ret_b.toFixed(2)+"%)" : "Not a true arb"}
-        </span></div>
-    </div>
-  `;
-}
-
-document.getElementById("calc-close").addEventListener("click", () => {
-  document.getElementById("calc-panel").classList.add("hidden");
-});
-
-/* ── Markets tab ────────────────────────────────────────────────────────── */
-
-async function loadMarkets() {
-  const body = document.getElementById("markets-body");
-  body.innerHTML = `<tr><td colspan="8" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
-
-  const q           = document.getElementById("m-search").value.trim();
-  const matchedOnly = document.getElementById("m-matched-only").checked;
-
-  let url = `/api/markets?limit=200`;
-  if (q)           url += `&q=${encodeURIComponent(q)}`;
-  if (matchedOnly) url += `&matched_only=true`;
-
-  try {
-    const rows = await apiFetch(url);
-    if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="8" class="empty">No markets found.</td></tr>`;
-      return;
-    }
-
-    body.innerHTML = rows.map(r => {
-      const matched = !!r.event_id;
-      const pmUrl   = `https://polymarket.com/event/${esc(r.slug || "")}`;
-      const ev = matched
-        ? `<span class="ev-teams">${esc(r.home_team)} vs ${esc(r.away_team)}</span>
-           <div class="ev-meta">${esc(r.bookmaker)} · ${esc(r.competition)}</div>`
-        : `<span style="color:var(--text-dim);font-size:.78rem">No match</span>`;
-
-      const conf = matched
-        ? `${confDot(r.match_score || 0)}${((r.match_score||0)*100).toFixed(0)}%
-           ${r.is_manual ? '<span class="tag">manual</span>' : ""}`
-        : "–";
-
-      return `<tr>
-        <td class="q-text" style="max-width:320px">
-          <a class="q-link" href="${pmUrl}" target="_blank" title="${esc(r.question)}">${esc(r.question)}</a>
-        </td>
-        <td class="n pm-pct">${(r.yes_price*100).toFixed(1)}%</td>
-        <td class="n pm-pct">${(r.no_price*100).toFixed(1)}%</td>
-        <td class="n">${money(r.volume)}</td>
-        <td>${ev}</td>
-        <td class="n">${conf}</td>
-        <td><span class="tag">${esc(r.category || "–")}</span></td>
-        <td>${matched ? `<button class="btn-unmatch" data-id="${esc(r.id)}" title="Remove match">✕</button>` : ""}</td>
-      </tr>`;
-    }).join("");
-
-    body.querySelectorAll(".btn-unmatch").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        await apiFetch(`/api/markets/${btn.dataset.id}/unmatch`, { method: "POST" });
-        loadMarkets();
-      });
-    });
-  } catch (e) {
-    body.innerHTML = `<tr><td colspan="8" class="empty">Error: ${esc(e.message)}</td></tr>`;
-  }
-}
-
-/* ── Settings tab ───────────────────────────────────────────────────────── */
+/* ── Settings tab ────────────────────────────────────────────────────────── */
 
 async function loadConfig() {
-  try {
-    const cfg = await apiFetch("/api/config");
-    const keyInput = document.getElementById("cfg-key");
-    const keyHint  = document.getElementById("cfg-key-hint");
-    if (cfg.odds_api_key_set) {
-      keyInput.placeholder = cfg.odds_api_key_masked || "••••••••";
-      keyHint.textContent  = "Key is set (leave blank to keep current)";
-    }
-    document.getElementById("cfg-books").value    = cfg.bookmakers    || "pinnacle";
-    document.getElementById("cfg-interval").value = cfg.fetch_interval || "10";
-    document.getElementById("cfg-minvol").value   = cfg.min_volume     || "5000";
-    document.getElementById("cfg-thresh").value   = cfg.match_threshold || "0.38";
-  } catch {}
+  let cfg;
+  try { cfg = await api("/api/config"); } catch (_) { return; }
+
+  // Odds API
+  if (cfg.odds_api_key_set) {
+    document.getElementById("cfg-odds-key").placeholder = cfg.odds_api_key_masked || "••••••••";
+    document.getElementById("cfg-odds-hint").textContent =
+      "Key saved (" + (cfg.odds_api_key_masked || "set") + ") — leave blank to keep";
+  }
+  document.getElementById("cfg-books").value = cfg.bookmakers || "pinnacle";
+
+  // Auto-betting
+  document.getElementById("cfg-auto-bet").checked = cfg.auto_bet_enabled === "true";
+  if (cfg.pm_private_key_set) {
+    document.getElementById("cfg-pk").placeholder = cfg.pm_private_key_masked || "0x… (set)";
+    document.getElementById("cfg-pk-hint").textContent =
+      "Key saved (" + (cfg.pm_private_key_masked || "set") + ") — leave blank to keep";
+  }
+  document.getElementById("cfg-size").value     = cfg.bet_size     || "10";
+  document.getElementById("cfg-min-edge").value = cfg.min_edge_pct  || "2.5";
+  document.getElementById("cfg-max-bets").value = cfg.max_bets_day  || "10";
+
+  // Fetch & Matching
+  document.getElementById("cfg-interval").value = cfg.fetch_interval  || "10";
+  document.getElementById("cfg-minvol").value   = cfg.min_volume       || "5000";
+  document.getElementById("cfg-thresh").value   = cfg.match_threshold  || "0.50";
 }
 
 document.getElementById("btn-save").addEventListener("click", async () => {
   const msg = document.getElementById("save-msg");
   msg.className = "save-msg hidden";
 
-  const body = {};
-  const key  = document.getElementById("cfg-key").value.trim();
-  if (key) body.odds_api_key = key;
+  const body = {
+    bookmakers:       document.getElementById("cfg-books").value.trim()    || "pinnacle",
+    auto_bet_enabled: document.getElementById("cfg-auto-bet").checked ? "true" : "false",
+    bet_size:         document.getElementById("cfg-size").value,
+    min_edge_pct:     document.getElementById("cfg-min-edge").value,
+    max_bets_day:     document.getElementById("cfg-max-bets").value,
+    fetch_interval:   document.getElementById("cfg-interval").value,
+    min_volume:       document.getElementById("cfg-minvol").value,
+    match_threshold:  document.getElementById("cfg-thresh").value,
+  };
 
-  body.bookmakers      = document.getElementById("cfg-books").value.trim()    || "pinnacle";
-  body.fetch_interval  = document.getElementById("cfg-interval").value.trim() || "10";
-  body.min_volume      = document.getElementById("cfg-minvol").value.trim()   || "5000";
-  body.match_threshold = document.getElementById("cfg-thresh").value.trim()   || "0.38";
+  const oddsKey = document.getElementById("cfg-odds-key").value.trim();
+  if (oddsKey) body.odds_api_key = oddsKey;
+
+  const pk = document.getElementById("cfg-pk").value.trim();
+  if (pk) body.pm_private_key = pk;
 
   try {
-    await apiFetch("/api/config", {
+    await api("/api/config", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    msg.textContent = "✓ Settings saved. Click 'Fetch now' to apply.";
+    msg.textContent = "Settings saved.";
     msg.className = "save-msg ok";
-    document.getElementById("cfg-key").value = "";
+    document.getElementById("cfg-odds-key").value = "";
+    document.getElementById("cfg-pk").value = "";
     await loadConfig();
   } catch (e) {
-    msg.textContent = "Error: " + e.message;
+    msg.textContent = "Error saving: " + e.message;
     msg.className = "save-msg err";
   }
   msg.classList.remove("hidden");
+  setTimeout(() => msg.classList.add("hidden"), 4000);
 });
 
-/* ── Fetch now button ───────────────────────────────────────────────────── */
+/* ── Auto-refresh & init ─────────────────────────────────────────────────── */
 
-async function triggerFetch(btn) {
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.innerHTML = `<span class="spinner"></span>Running…`;
-  try {
-    await apiFetch("/api/fetch", { method: "POST" });
-    // Poll stats until last_fetch changes
-    let attempts = 0;
-    const poll = setInterval(async () => {
-      await loadStats();
-      attempts++;
-      if (attempts > 30) clearInterval(poll); // give up after 5 min
-    }, 10_000);
-    setTimeout(() => { loadArb(); clearInterval(poll); }, 15_000);
-  } catch (e) {
-    alert("Fetch error: " + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = orig;
-  }
-}
+refreshStats();
+setInterval(refreshStats, 30_000);
 
-document.getElementById("btn-fetch").addEventListener("click", function() {
-  triggerFetch(this);
-});
-
-/* ── Apply filter buttons ────────────────────────────────────────────────── */
-
-document.getElementById("btn-apply").addEventListener("click", loadArb);
-document.getElementById("m-apply").addEventListener("click", loadMarkets);
-
-// Also apply on Enter in filter inputs
-["f-edge","f-sport","f-bk"].forEach(id => {
-  document.getElementById(id)?.addEventListener("keydown", e => {
-    if (e.key === "Enter") loadArb();
-  });
-});
-document.getElementById("m-search")?.addEventListener("keydown", e => {
-  if (e.key === "Enter") loadMarkets();
-});
-
-/* ── Auto-refresh ────────────────────────────────────────────────────────── */
-
-setInterval(loadStats, 30_000);
-
-/* ── Init ────────────────────────────────────────────────────────────────── */
-
-(async () => {
-  await loadStats();
-  await loadArb();
-
-  // Show no-key banner if needed
-  try {
-    const cfg = await apiFetch("/api/config");
-    if (!cfg.odds_api_key_set) {
-      document.getElementById("no-key-banner").classList.remove("hidden");
-    }
-  } catch {}
-})();
+switchTab("edges");

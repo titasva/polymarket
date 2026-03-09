@@ -1,3 +1,4 @@
 flask
 requests
 schedule
+py-clob-client

@@ -5,28 +5,27 @@ from config import DB_PATH
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.executescript("""
-        -- key/value settings store
         CREATE TABLE IF NOT EXISTS settings (
-            key     TEXT PRIMARY KEY,
-            value   TEXT
+            key   TEXT PRIMARY KEY,
+            value TEXT
         );
 
-        -- Active Polymarket markets
         CREATE TABLE IF NOT EXISTS pm_markets (
-            id           TEXT PRIMARY KEY,
-            question     TEXT,
-            yes_price    REAL,
-            no_price     REAL,
-            volume       REAL,
-            end_date     TEXT,
-            slug         TEXT,
-            category     TEXT,
-            last_updated TEXT
+            id             TEXT PRIMARY KEY,
+            question       TEXT,
+            yes_price      REAL,
+            no_price       REAL,
+            yes_token_id   TEXT,
+            no_token_id    TEXT,
+            volume         REAL,
+            end_date       TEXT,
+            slug           TEXT,
+            category       TEXT,
+            last_updated   TEXT
         );
 
-        -- Odds events from bookmakers (one row per event × bookmaker)
         CREATE TABLE IF NOT EXISTS odds_events (
-            id             TEXT PRIMARY KEY,   -- event_id + "_" + bookmaker_key
+            id             TEXT PRIMARY KEY,
             raw_event_id   TEXT,
             sport          TEXT,
             competition    TEXT,
@@ -44,18 +43,17 @@ def init_db():
             last_updated   TEXT
         );
 
-        -- Best auto/manual match between a PM market and an odds event
         CREATE TABLE IF NOT EXISTS market_matches (
             pm_id          TEXT PRIMARY KEY,
             event_id       TEXT,
-            pm_yes_is_home INTEGER,   -- 1 = PM YES maps to home team winning
+            pm_yes_is_home INTEGER,
             match_score    REAL,
             is_manual      INTEGER DEFAULT 0,
             created_at     TEXT DEFAULT (datetime('now'))
         );
 
-        -- Timestamped arb snapshots (one row per fetch cycle per matched pair)
-        CREATE TABLE IF NOT EXISTS arb_log (
+        -- Edge snapshots (one row per fetch cycle per matched pair)
+        CREATE TABLE IF NOT EXISTS edge_log (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             pm_id            TEXT,
             event_id         TEXT,
@@ -65,20 +63,38 @@ def init_db():
             book_no_decimal  REAL,
             book_yes_implied REAL,
             book_no_implied  REAL,
-            yes_edge         REAL,   -- book_yes_implied - pm_yes  (+ means PM is cheap)
-            no_edge          REAL,   -- book_no_implied  - pm_no
-            max_edge         REAL,   -- max(|yes_edge|, |no_edge|)
-            is_arb           INTEGER,
-            arb_return_pct   REAL,
-            best_strategy    TEXT,
+            yes_edge         REAL,
+            no_edge          REAL,
+            max_edge         REAL,
+            best_side        TEXT,   -- YES, NO, or NULL
+            best_edge        REAL,   -- positive edge value (0 if none)
             detected_at      TEXT DEFAULT (datetime('now'))
         );
 
-        CREATE INDEX IF NOT EXISTS idx_arb_pm      ON arb_log(pm_id);
-        CREATE INDEX IF NOT EXISTS idx_arb_det     ON arb_log(detected_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_arb_edge    ON arb_log(max_edge DESC);
-        CREATE INDEX IF NOT EXISTS idx_pm_vol      ON pm_markets(volume DESC);
-        CREATE INDEX IF NOT EXISTS idx_oe_sport    ON odds_events(sport);
+        -- Bets placed via auto-betting
+        CREATE TABLE IF NOT EXISTS bets (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            pm_id        TEXT,
+            question     TEXT,
+            event_name   TEXT,
+            bookmaker    TEXT,
+            side         TEXT,        -- YES or NO
+            pm_price     REAL,        -- PM price at time of bet
+            book_implied REAL,        -- book's implied prob for same outcome
+            edge_pct     REAL,        -- edge % at time of bet
+            size_usdc    REAL,
+            token_id     TEXT,
+            order_id     TEXT,
+            status       TEXT,        -- PLACED, FAILED, SKIPPED
+            error        TEXT,
+            placed_at    TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_edge_pm      ON edge_log(pm_id);
+        CREATE INDEX IF NOT EXISTS idx_edge_det     ON edge_log(detected_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_edge_val     ON edge_log(max_edge DESC);
+        CREATE INDEX IF NOT EXISTS idx_bets_placed  ON bets(placed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_pm_vol       ON pm_markets(volume DESC);
     """)
     conn.commit()
     conn.close()

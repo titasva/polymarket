@@ -1,8 +1,8 @@
 """
 fetcher.py
 ──────────
-Fetches Polymarket markets + bookmaker odds, runs matching & arb calculation,
-and writes results to SQLite.
+Fetches Polymarket markets + bookmaker odds, runs matching & edge calculation,
+optionally triggers auto-bets, and writes results to SQLite.
 
 Run standalone:  python fetcher.py
 """
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import requests
 import schedule
 
-from arb_engine import calc_arb, find_best_match
+from arb_engine import calc_edge, find_best_match
 from config import (
     DB_PATH, DEFAULT_BOOKMAKERS, DEFAULT_FETCH_MIN,
     MATCH_THRESHOLD, MIN_VOLUME, ODDS_API_BASE,
@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-HEADERS = {"User-Agent": "polymarket-arb-tracker/1.0"}
+HEADERS = {"User-Agent": "polymarket-edge-tracker/1.0"}
 
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
@@ -91,25 +91,41 @@ def fetch_pm_markets() -> list[dict]:
     return out
 
 
-def _parse_pm(m: dict) -> dict | None:
-    raw = m.get("outcomePrices") or ["0.5", "0.5"]
-    # Gamma API often returns outcomePrices as a JSON-encoded string, e.g.
-    # "[\"0.65\", \"0.35\"]" — parse it if so.
+def _parse_json_field(raw):
+    """Parse a field that may be a JSON-encoded string or already a list."""
     if isinstance(raw, str):
         try:
-            raw = json.loads(raw)
+            return json.loads(raw)
         except (json.JSONDecodeError, ValueError):
-            raw = ["0.5", "0.5"]
+            return []
+    return raw or []
+
+
+def _parse_pm(m: dict) -> dict | None:
+    # outcomePrices is often a JSON-encoded string from the Gamma API
+    raw_prices = _parse_json_field(m.get("outcomePrices"))
     try:
-        yes = float(raw[0])
-        no  = float(raw[1]) if len(raw) > 1 else round(1 - yes, 6)
+        yes = float(raw_prices[0])
+        no  = float(raw_prices[1]) if len(raw_prices) > 1 else round(1 - yes, 6)
     except (ValueError, TypeError, IndexError):
         yes, no = 0.5, 0.5
+
+    # Extract outcome token IDs (needed for placing bets)
+    yes_token_id = no_token_id = ""
+    raw_tokens = _parse_json_field(m.get("tokens"))
+    for tok in raw_tokens:
+        if isinstance(tok, dict):
+            outcome = tok.get("outcome", "").lower()
+            tid     = tok.get("token_id", "") or tok.get("tokenId", "")
+            if outcome in ("yes", "1"):
+                yes_token_id = tid
+            elif outcome in ("no", "0"):
+                no_token_id = tid
 
     tags = m.get("tags") or []
     cat  = ""
     if tags:
-        t0 = tags[0]
+        t0  = tags[0]
         cat = (t0.get("label") or t0.get("slug") or "") if isinstance(t0, dict) else str(t0)
 
     mid = m.get("id") or m.get("conditionId", "")
@@ -117,7 +133,6 @@ def _parse_pm(m: dict) -> dict | None:
         return None
 
     end_date = m.get("endDate", "")
-    # Drop markets that have already closed
     if end_date:
         try:
             ed = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
@@ -127,14 +142,16 @@ def _parse_pm(m: dict) -> dict | None:
             pass
 
     return {
-        "id":        mid,
-        "question":  m.get("question", ""),
-        "yes_price": yes,
-        "no_price":  no,
-        "volume":    float(m.get("volume") or 0),
-        "end_date":  end_date,
-        "slug":      m.get("slug", ""),
-        "category":  cat,
+        "id":           mid,
+        "question":     m.get("question", ""),
+        "yes_price":    yes,
+        "no_price":     no,
+        "yes_token_id": yes_token_id,
+        "no_token_id":  no_token_id,
+        "volume":       float(m.get("volume") or 0),
+        "end_date":     end_date,
+        "slug":         m.get("slug", ""),
+        "category":     cat,
     }
 
 
@@ -145,21 +162,23 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
         log.warning("No Odds API key — skipping odds fetch")
         return []
 
-    sports = get_setting("tracked_sports", "")
-    sport_list = [s.strip() for s in sports.split(",") if s.strip()] if sports else TRACKED_SPORTS
+    sports_raw = get_setting("tracked_sports", "")
+    sport_list = (
+        [s.strip() for s in sports_raw.split(",") if s.strip()]
+        if sports_raw else TRACKED_SPORTS
+    )
 
-    out = []
-    remaining = None
+    out, remaining = [], None
 
     for sport in sport_list:
         r, data = _get(
             f"{ODDS_API_BASE}/sports/{sport}/odds",
             params={
-                "apiKey":      api_key,
-                "regions":     "us,eu",
-                "markets":     "h2h",
-                "bookmakers":  bookmakers,
-                "oddsFormat":  "decimal",
+                "apiKey":     api_key,
+                "regions":    "us,eu",
+                "markets":    "h2h",
+                "bookmakers": bookmakers,
+                "oddsFormat": "decimal",
             },
         )
         if data is None:
@@ -171,7 +190,7 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
             out.extend(_parse_odds_event(ev, sport))
 
         log.info("  → %s: %d events", sport, len(data))
-        time.sleep(0.4)   # polite rate limiting
+        time.sleep(0.4)
 
     if remaining is not None:
         set_setting("odds_api_remaining", str(remaining))
@@ -182,7 +201,7 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
 
 
 def _parse_odds_event(ev: dict, sport: str) -> list[dict]:
-    # Skip events that have already started
+    # Drop events that have already started
     commence = ev.get("commence_time", "")
     if commence:
         try:
@@ -215,7 +234,6 @@ def _parse_odds_event(ev: dict, sport: str) -> list[dict]:
                 elif name.lower() in ("draw", "tie"):
                     draw_dec = price
 
-            # Fallback: positional assignment
             if not home_dec or not away_dec:
                 prices = [float(o.get("price", 0)) for o in outcomes]
                 if len(prices) >= 2:
@@ -231,21 +249,21 @@ def _parse_odds_event(ev: dict, sport: str) -> list[dict]:
 
             bk_key = bk.get("key", "")
             results.append({
-                "id":             ev.get("id", "") + "_" + bk_key,
-                "raw_event_id":   ev.get("id", ""),
-                "sport":          sport,
-                "competition":    ev.get("sport_title", sport),
-                "home_team":      home,
-                "away_team":      away,
-                "commence_time":  ev.get("commence_time", ""),
-                "bookmaker":      bk.get("title", bk_key),
-                "bookmaker_key":  bk_key,
-                "home_decimal":   home_dec,
-                "away_decimal":   away_dec,
-                "draw_decimal":   draw_dec,
-                "home_implied":   home_impl,
-                "away_implied":   away_impl,
-                "overround":      overround,
+                "id":            ev.get("id", "") + "_" + bk_key,
+                "raw_event_id":  ev.get("id", ""),
+                "sport":         sport,
+                "competition":   ev.get("sport_title", sport),
+                "home_team":     home,
+                "away_team":     away,
+                "commence_time": commence,
+                "bookmaker":     bk.get("title", bk_key),
+                "bookmaker_key": bk_key,
+                "home_decimal":  home_dec,
+                "away_decimal":  away_dec,
+                "draw_decimal":  draw_dec,
+                "home_implied":  home_impl,
+                "away_implied":  away_impl,
+                "overround":     overround,
             })
     return results
 
@@ -258,9 +276,11 @@ def _save_pm(markets: list[dict]) -> None:
     for m in markets:
         c.execute(
             """INSERT OR REPLACE INTO pm_markets
-               (id, question, yes_price, no_price, volume, end_date, slug, category, last_updated)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (id, question, yes_price, no_price, yes_token_id, no_token_id,
+                volume, end_date, slug, category, last_updated)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (m["id"], m["question"], m["yes_price"], m["no_price"],
+             m["yes_token_id"], m["no_token_id"],
              m["volume"], m["end_date"], m["slug"], m["category"], now),
         )
     c.commit()
@@ -288,11 +308,11 @@ def _save_events(events: list[dict]) -> None:
     c.close()
 
 
-def _save_match_arb(pm: dict, ev: dict, score: float, yih: bool, arb: dict) -> None:
+def _save_match_edge(pm: dict, ev: dict, score: float, yih: bool, edge: dict) -> None:
     c = _conn()
     now = datetime.utcnow().isoformat()
 
-    # Skip if this market has a manual match override
+    # Skip if this market has a manual override pointing to a different event
     row = c.execute(
         "SELECT is_manual, event_id FROM market_matches WHERE pm_id=?", (pm["id"],)
     ).fetchone()
@@ -306,22 +326,19 @@ def _save_match_arb(pm: dict, ev: dict, score: float, yih: bool, arb: dict) -> N
            VALUES (?,?,?,?,0,?)""",
         (pm["id"], ev["id"], int(yih), round(score, 4), now),
     )
-
     c.execute(
-        """INSERT INTO arb_log
+        """INSERT INTO edge_log
            (pm_id, event_id, pm_yes_price, pm_no_price,
             book_yes_decimal, book_no_decimal,
             book_yes_implied, book_no_implied,
-            yes_edge, no_edge, max_edge,
-            is_arb, arb_return_pct, best_strategy, detected_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            yes_edge, no_edge, max_edge, best_side, best_edge, detected_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (pm["id"], ev["id"],
-         arb["pm_yes"], arb["pm_no"],
-         arb["book_yes_decimal"], arb["book_no_decimal"],
-         arb["book_yes_implied"], arb["book_no_implied"],
-         arb["yes_edge"], arb["no_edge"], arb["max_edge"],
-         int(arb["is_arb"]), arb["arb_return_pct"], arb["best_strategy"],
-         now),
+         edge["pm_yes"], edge["pm_no"],
+         edge["book_yes_decimal"], edge["book_no_decimal"],
+         edge["book_yes_implied"], edge["book_no_implied"],
+         edge["yes_edge"], edge["no_edge"], edge["max_edge"],
+         edge["best_side"], edge["best_edge"], now),
     )
     c.commit()
     c.close()
@@ -338,8 +355,8 @@ def fetch_all() -> None:
     min_vol    = float(get_setting("min_volume", str(MIN_VOLUME)))
 
     # 1. Polymarket
-    raw = fetch_pm_markets()
-    markets = [m for m in (_parse_pm(r) for r in raw) if m and m["volume"] >= min_vol]
+    raw      = fetch_pm_markets()
+    markets  = [m for m in (_parse_pm(r) for r in raw) if m and m["volume"] >= min_vol]
     _save_pm(markets)
     log.info("Stored %d PM markets (vol ≥ $%s)", len(markets), min_vol)
 
@@ -348,21 +365,42 @@ def fetch_all() -> None:
     if events:
         _save_events(events)
 
-    # 3. Match & arb
-    matched = arbs = 0
+    # 3. Match, calculate edge, optionally auto-bet
+    from bettor import maybe_place_bet
+    matched = edges = 0
+
     for pm in markets:
         ev, score, yih = find_best_match(pm["question"], events, threshold)
         if ev is None:
             continue
-        arb = calc_arb(pm["yes_price"], pm["no_price"],
-                       ev["home_decimal"], ev["away_decimal"], yih)
-        _save_match_arb(pm, ev, score, yih, arb)
+
+        edge = calc_edge(
+            pm["yes_price"], pm["no_price"],
+            ev["home_decimal"], ev["away_decimal"], yih,
+        )
+        _save_match_edge(pm, ev, score, yih, edge)
         matched += 1
-        if arb["is_arb"]:
-            arbs += 1
+
+        if edge["best_side"] and edge["best_edge"] > 0:
+            edges += 1
+            token_id = (
+                pm["yes_token_id"] if edge["best_side"] == "YES"
+                else pm["no_token_id"]
+            )
+            maybe_place_bet(
+                pm_id=pm["id"],
+                question=pm["question"],
+                event_name=f'{ev["home_team"]} vs {ev["away_team"]}',
+                bookmaker=ev["bookmaker"],
+                side=edge["best_side"],
+                pm_price=edge["bet_price"],
+                book_implied=edge["book_impl"],
+                edge_pct=edge["best_edge"] * 100,
+                token_id=token_id,
+            )
 
     set_setting("last_fetch", datetime.utcnow().isoformat())
-    log.info("Matched %d/%d  |  %d true arbs found", matched, len(markets), arbs)
+    log.info("Matched %d/%d  |  %d with positive edge", matched, len(markets), edges)
     log.info("═══ Fetch cycle done  ═══")
 
 

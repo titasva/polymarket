@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Polymarket Arb Finder</title>
+  <title>Polymarket Edge Finder</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
 
-  <!-- ── Header ── -->
   <header>
     <div class="header-inner">
       <div class="logo">
@@ -16,47 +15,44 @@
           <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
           <polyline points="16 7 22 7 22 13"/>
         </svg>
-        <span>Arb Finder</span>
+        <span>Edge Finder</span>
         <span class="logo-divider">×</span>
         <span class="logo-sub">Polymarket + Pinnacle</span>
       </div>
 
       <div class="header-stats">
-        <div class="stat-pill"><span class="stat-label">PM</span><span class="stat-val" id="stat-markets">–</span></div>
-        <div class="stat-pill"><span class="stat-label">Events</span><span class="stat-val" id="stat-events">–</span></div>
-        <div class="stat-pill"><span class="stat-label">Matched</span><span class="stat-val" id="stat-matched">–</span></div>
-        <div class="stat-pill arb-pill"><span class="stat-label">Arbs</span><span class="stat-val" id="stat-arbs">–</span></div>
-        <span id="stat-api" class="stat-api dim"></span>
-        <span id="last-fetch" class="dim"></span>
+        <div class="stat-pill"><span class="sl">PM</span><span class="sv" id="st-pm">–</span></div>
+        <div class="stat-pill"><span class="sl">Events</span><span class="sv" id="st-ev">–</span></div>
+        <div class="stat-pill"><span class="sl">Matched</span><span class="sv" id="st-match">–</span></div>
+        <div class="stat-pill edge-pill"><span class="sl">With edge</span><span class="sv" id="st-edge">–</span></div>
+        <div class="stat-pill bet-pill"><span class="sl">Bets today</span><span class="sv" id="st-bets">–</span></div>
+        <span id="st-api" class="dim"></span>
+        <span id="st-fetch" class="dim"></span>
       </div>
 
       <nav class="nav-tabs">
-        <button class="nav-tab active" data-tab="arb">Opportunities</button>
+        <button class="nav-tab active" data-tab="edges">Opportunities</button>
+        <button class="nav-tab" data-tab="bets">Bets</button>
         <button class="nav-tab" data-tab="markets">Markets</button>
         <button class="nav-tab" data-tab="settings">Settings</button>
       </nav>
     </div>
   </header>
 
-  <!-- ─────────────────────────── TAB: ARB ─────────────────────────── -->
-  <section id="tab-arb" class="tab-pane active">
-
+  <!-- ── Opportunities ─────────────────────────────────────────────────── -->
+  <section id="tab-edges" class="tab-pane active">
     <div class="toolbar">
       <label class="filter-field">
-        <span class="filter-label">Min edge %</span>
+        <span class="fl">Min edge %</span>
         <input type="number" id="f-edge" value="1" min="0" max="50" step="0.5" />
       </label>
       <label class="filter-field">
-        <span class="filter-label">Sport</span>
+        <span class="fl">Sport</span>
         <input type="text" id="f-sport" placeholder="any" />
       </label>
       <label class="filter-field">
-        <span class="filter-label">Bookmaker</span>
+        <span class="fl">Bookmaker</span>
         <input type="text" id="f-bk" placeholder="any" />
-      </label>
-      <label class="filter-field toggle-field">
-        <input type="checkbox" id="f-arb-only" />
-        <span>True arb only</span>
       </label>
       <div class="toolbar-right">
         <button id="btn-apply" class="btn-primary btn-sm">Apply</button>
@@ -67,12 +63,11 @@
     <div id="no-key-banner" class="banner banner-warn hidden">
       <strong>No Odds API key configured.</strong>
       Go to <a href="#" class="tab-link" data-tab="settings">Settings</a> and add your free key from
-      <a href="https://the-odds-api.com" target="_blank">the-odds-api.com</a>
-      (500 req/month free). Then click <em>Fetch now</em>.
+      <a href="https://the-odds-api.com" target="_blank">the-odds-api.com</a>, then click Fetch now.
     </div>
 
     <div class="table-scroll">
-      <table class="data-table" id="arb-table">
+      <table class="data-table">
         <thead>
           <tr>
             <th>Event (Sportsbook)</th>
@@ -81,74 +76,80 @@
             <th class="n">Book YES%</th>
             <th class="n">PM NO%</th>
             <th class="n">Book NO%</th>
-            <th class="n sortable active-sort" id="th-edge">Edge▾</th>
-            <th class="n">Arb</th>
-            <th>Best strategy</th>
+            <th class="n">Edge%</th>
+            <th class="n">Bet side</th>
+            <th class="n">Auto-bet</th>
             <th class="n">Conf</th>
-            <th></th>
           </tr>
         </thead>
-        <tbody id="arb-body">
-          <tr><td colspan="11" class="loading">Loading…</td></tr>
+        <tbody id="edges-body">
+          <tr><td colspan="10" class="loading">Loading…</td></tr>
         </tbody>
       </table>
     </div>
+  </section>
 
-    <!-- Bet calculator slide-in -->
-    <div id="calc-panel" class="calc-panel hidden">
-      <div class="calc-inner">
-        <div class="calc-header">
-          <h3 id="calc-title">Bet Calculator</h3>
-          <button id="calc-close" class="btn-icon">×</button>
-        </div>
-        <div class="calc-body">
-          <p id="calc-event" class="calc-event"></p>
-          <label class="calc-stake-label">
-            Total stake
-            <div class="stake-input-wrap">
-              <span class="currency">$</span>
-              <input type="number" id="calc-stake" value="1000" min="1" step="100" />
-            </div>
-          </label>
-          <div id="calc-results" class="calc-results"></div>
-          <p class="calc-disclaimer">
-            ⚠ Prices fluctuate. Verify live prices before placing bets.
-            Past arb gaps do not guarantee future opportunities.
-          </p>
-        </div>
+  <!-- ── Bets ──────────────────────────────────────────────────────────── -->
+  <section id="tab-bets" class="tab-pane">
+    <div class="toolbar">
+      <span class="toolbar-title">Auto-placed bets</span>
+      <div class="toolbar-right">
+        <button id="btn-refresh-bets" class="btn-ghost btn-sm">↻ Refresh</button>
       </div>
+    </div>
+
+    <div class="bets-summary" id="bets-summary"></div>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Polymarket question</th>
+            <th class="n">Side</th>
+            <th class="n">PM price</th>
+            <th class="n">Book implied</th>
+            <th class="n">Edge %</th>
+            <th class="n">Amount</th>
+            <th class="n">Status</th>
+            <th>Order ID</th>
+          </tr>
+        </thead>
+        <tbody id="bets-body">
+          <tr><td colspan="10" class="loading">Loading…</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
-  <!-- ─────────────────────────── TAB: MARKETS ─────────────────────── -->
+  <!-- ── Markets ───────────────────────────────────────────────────────── -->
   <section id="tab-markets" class="tab-pane">
-
     <div class="toolbar">
       <label class="filter-field" style="flex:1;max-width:400px">
-        <span class="filter-label">Search</span>
+        <span class="fl">Search</span>
         <input type="text" id="m-search" placeholder="keyword …" />
       </label>
       <label class="filter-field toggle-field">
-        <input type="checkbox" id="m-matched-only" />
+        <input type="checkbox" id="m-matched" />
         <span>Matched only</span>
       </label>
       <div class="toolbar-right">
         <button id="m-apply" class="btn-primary btn-sm">Apply</button>
       </div>
     </div>
-
     <div class="table-scroll">
-      <table class="data-table" id="markets-table">
+      <table class="data-table">
         <thead>
           <tr>
-            <th>Polymarket question</th>
+            <th>Question</th>
             <th class="n">YES%</th>
             <th class="n">NO%</th>
             <th class="n">Volume</th>
             <th>Matched event</th>
             <th class="n">Conf</th>
             <th>Category</th>
-            <th>Actions</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="markets-body">
@@ -158,62 +159,78 @@
     </div>
   </section>
 
-  <!-- ─────────────────────────── TAB: SETTINGS ────────────────────── -->
+  <!-- ── Settings ──────────────────────────────────────────────────────── -->
   <section id="tab-settings" class="tab-pane">
     <div class="settings-page">
 
       <div class="settings-card">
-        <h2>Odds API Key</h2>
+        <h2>Odds API</h2>
         <p class="muted">
-          Get a <strong>free</strong> key from
-          <a href="https://the-odds-api.com" target="_blank">the-odds-api.com</a>
-          (500 requests/month on the free tier — enough for hourly fetches across ~5 sports).
+          Free key from <a href="https://the-odds-api.com" target="_blank">the-odds-api.com</a>
+          (500 req/month free — enough for hourly fetches across ~5 sports).
         </p>
         <label class="sfield">
           API Key
-          <input type="password" id="cfg-key" placeholder="Paste your key here …" autocomplete="off" />
-          <span id="cfg-key-hint" class="field-hint"></span>
+          <input type="password" id="cfg-odds-key" placeholder="Paste your key …" autocomplete="off" />
+          <span id="cfg-odds-hint" class="field-hint"></span>
         </label>
         <label class="sfield">
-          Bookmakers <span class="muted">(comma-separated key names)</span>
+          Bookmakers <span class="muted">(comma-separated)</span>
           <input type="text" id="cfg-books" placeholder="pinnacle" />
-          <span class="field-hint">e.g. <code>pinnacle,draftkings,fanduel,betmgm</code></span>
+          <span class="field-hint">e.g. <code>pinnacle,draftkings,fanduel</code></span>
         </label>
+      </div>
+
+      <div class="settings-card">
+        <h2>Auto-Betting</h2>
+        <p class="muted">
+          Places limit orders on Polymarket when edge ≥ threshold.
+          Requires a Polygon wallet with USDC that has already traded on Polymarket at least once
+          (to register the proxy wallet and approve the CLOB contract).
+          <strong>Use a dedicated wallet — never your main wallet.</strong>
+        </p>
+        <label class="sfield toggle-sfield">
+          <input type="checkbox" id="cfg-auto-bet" />
+          <span>Enable auto-betting</span>
+        </label>
+        <label class="sfield">
+          Polymarket private key (0x…)
+          <input type="password" id="cfg-pk" placeholder="0x… Polygon private key" autocomplete="off" />
+          <span id="cfg-pk-hint" class="field-hint"></span>
+        </label>
+        <div class="sfield-row">
+          <label class="sfield">
+            Bet size (USDC per trade)
+            <input type="number" id="cfg-size" value="10" min="1" step="1" />
+          </label>
+          <label class="sfield">
+            Min edge % to trigger
+            <input type="number" id="cfg-min-edge" value="2.5" min="0.1" step="0.5" />
+          </label>
+          <label class="sfield">
+            Max bets per day
+            <input type="number" id="cfg-max-bets" value="10" min="1" step="1" />
+          </label>
+        </div>
       </div>
 
       <div class="settings-card">
         <h2>Fetch &amp; Matching</h2>
-        <label class="sfield">
-          Fetch interval (minutes)
-          <input type="number" id="cfg-interval" value="10" min="1" max="120" />
-          <span class="field-hint">Keep high to preserve API quota (free = 500 req/month).</span>
-        </label>
-        <label class="sfield">
-          Min Polymarket volume ($)
-          <input type="number" id="cfg-minvol" value="5000" min="0" />
-          <span class="field-hint">Filters out illiquid markets with unreliable prices.</span>
-        </label>
-        <label class="sfield">
-          Match confidence threshold (0 – 1)
-          <input type="number" id="cfg-thresh" value="0.38" min="0.1" max="1" step="0.05" />
-          <span class="field-hint">Lower = more matches but more false positives. 0.35–0.50 recommended.</span>
-        </label>
-      </div>
-
-      <div class="settings-card">
-        <h2>How it works</h2>
-        <ol class="how-list">
-          <li>The <strong>fetcher</strong> pulls Polymarket markets (sorted by volume) every N minutes.</li>
-          <li>It calls The Odds API for live odds from Pinnacle (and any other bookmakers you add).</li>
-          <li>A fuzzy-text matcher links each PM question to the best sportsbook event.</li>
-          <li>Implied probabilities are compared: <code>book_implied − pm_implied = edge</code>.</li>
-          <li>If <code>pm_yes + book_no_implied &lt; 1</code> (or the symmetric case), a <strong>true arb</strong> exists.</li>
-          <li>All results appear in the Opportunities tab, sorted by edge size.</li>
-        </ol>
-        <p class="muted">
-          Auto-matching is heuristic — always verify the event match before placing a bet.
-          Use the Markets tab to inspect and override matches manually.
-        </p>
+        <div class="sfield-row">
+          <label class="sfield">
+            Fetch interval (minutes)
+            <input type="number" id="cfg-interval" value="10" min="1" max="120" />
+            <span class="field-hint">Keep high to preserve free API quota.</span>
+          </label>
+          <label class="sfield">
+            Min PM volume ($)
+            <input type="number" id="cfg-minvol" value="5000" min="0" />
+          </label>
+          <label class="sfield">
+            Match threshold (0–1)
+            <input type="number" id="cfg-thresh" value="0.50" min="0.1" max="1" step="0.05" />
+          </label>
+        </div>
       </div>
 
       <div class="settings-actions">
