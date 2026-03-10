@@ -111,16 +111,23 @@ def _parse_pm(m: dict) -> dict | None:
         yes, no = 0.5, 0.5
 
     # Extract outcome token IDs (needed for placing bets)
+    # Gamma API returns clobTokenIds as JSON string ["yes_id", "no_id"]
     yes_token_id = no_token_id = ""
-    raw_tokens = _parse_json_field(m.get("tokens"))
-    for tok in raw_tokens:
-        if isinstance(tok, dict):
-            outcome = tok.get("outcome", "").lower()
-            tid     = tok.get("token_id", "") or tok.get("tokenId", "")
-            if outcome in ("yes", "1"):
-                yes_token_id = tid
-            elif outcome in ("no", "0"):
-                no_token_id = tid
+    clob_ids = _parse_json_field(m.get("clobTokenIds"))
+    if len(clob_ids) >= 2:
+        yes_token_id = str(clob_ids[0])
+        no_token_id  = str(clob_ids[1])
+    else:
+        # Fallback: tokens array
+        raw_tokens = _parse_json_field(m.get("tokens"))
+        for tok in raw_tokens:
+            if isinstance(tok, dict):
+                outcome = tok.get("outcome", "").lower()
+                tid     = tok.get("token_id", "") or tok.get("tokenId", "")
+                if outcome in ("yes", "1"):
+                    yes_token_id = tid
+                elif outcome in ("no", "0"):
+                    no_token_id = tid
 
     tags = m.get("tags") or []
     cat  = ""

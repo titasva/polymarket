@@ -76,14 +76,11 @@ def _get_client(private_key: str):
 
 # ── Core bet placement ─────────────────────────────────────────────────────────
 
-def already_bet_today(pm_id: str) -> bool:
-    """Return True if we already placed a successful bet on this market today."""
+def already_bet(pm_id: str) -> bool:
+    """Return True if we ever placed a successful bet on this market."""
     c = _conn()
     row = c.execute(
-        """SELECT id FROM bets
-           WHERE pm_id = ?
-             AND status = 'PLACED'
-             AND date(placed_at) = date('now')""",
+        "SELECT id FROM bets WHERE pm_id = ? AND status = 'PLACED'",
         (pm_id,),
     ).fetchone()
     c.close()
@@ -131,12 +128,13 @@ def maybe_place_bet(
 
     # Gate 4: token ID available?
     if not token_id:
-        log.warning("No token_id for %s %s — cannot bet", side, pm_id)
+        log.warning("No token_id for %s side on %s — cannot bet (check clobTokenIds in API response)", side, pm_id)
         return
+    log.debug("Token ID for %s %s: %s", side, pm_id[:12], token_id[:16] + "…")
 
-    # Gate 5: already bet today on this market?
-    if already_bet_today(pm_id):
-        log.debug("Already bet on %s today — skipping", pm_id)
+    # Gate 5: already bet on this market (ever)?
+    if already_bet(pm_id):
+        log.debug("Already placed a bet on %s — skipping", pm_id)
         return
 
     # Gate 6: daily cap
