@@ -21,9 +21,6 @@ log = logging.getLogger(__name__)
 CLOB_HOST = "https://clob.polymarket.com"
 POLYGON_CHAIN_ID = 137
 
-# Cached flag — allowances only need to be set once per process run
-_allowances_ensured = False
-
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
@@ -74,45 +71,7 @@ def _get_client(private_key: str):
         )
     client = ClobClient(CLOB_HOST, key=private_key, chain_id=POLYGON_CHAIN_ID)
     client.set_api_creds(client.create_or_derive_api_creds())
-    _ensure_allowances(client)
     return client
-
-
-def _ensure_allowances(client) -> None:
-    """
-    Approve the Polymarket CTF Exchange contract to spend USDC and conditional
-    tokens from the wallet. This is an on-chain ERC-20 approve() call and only
-    needs to happen once per wallet (the approval is stored on-chain).
-    Requires a small amount of MATIC/POL for gas (~$0.001 on Polygon).
-    """
-    global _allowances_ensured
-    if _allowances_ensured:
-        return
-
-    try:
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-
-        for asset in (AssetType.USDC, AssetType.CONDITIONAL):
-            info = client.get_balance_allowance(
-                BalanceAllowanceParams(asset_type=asset)
-            )
-            allowance = float(info.get("allowance", 0))
-            if allowance < 1.0:
-                log.info(
-                    "Allowance for %s is zero — sending on-chain approve() "
-                    "(needs a few cents of MATIC/POL for gas)…", asset
-                )
-                client.update_balance_allowance(
-                    BalanceAllowanceParams(asset_type=asset)
-                )
-                log.info("  %s allowance set to max.", asset)
-            else:
-                log.debug("%s allowance OK (%.2f)", asset, allowance)
-
-        _allowances_ensured = True
-
-    except Exception as exc:
-        log.warning("Could not check/set allowances: %s", exc)
 
 
 # ── Core bet placement ─────────────────────────────────────────────────────────
