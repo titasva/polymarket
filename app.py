@@ -62,17 +62,27 @@ def set_config():
     body    = request.get_json(force=True) or {}
     allowed = {
         "odds_api_key", "bookmakers", "fetch_interval",
-        "match_threshold", "min_volume",
+        "match_threshold", "min_volume", "tracked_sports",
         "auto_bet_enabled", "bet_size", "min_edge_pct", "max_bets_day",
         "pm_private_key",
     }
+    # Keys that are allowed to be saved as empty string (clears the setting)
+    _clearable = {"tracked_sports"}
     c = _conn()
     for k, v in body.items():
-        if k in allowed and v is not None and str(v).strip():
+        if k not in allowed or v is None:
+            continue
+        sv = str(v).strip()
+        if not sv and k not in _clearable:
+            continue  # skip empty non-clearable values
+        if sv:
             c.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
-                (k, str(v)),
+                (k, sv),
             )
+        else:
+            # Blank → delete the setting so the default (auto-discover) kicks in
+            c.execute("DELETE FROM settings WHERE key=?", (k,))
     c.commit()
     c.close()
     return jsonify({"status": "ok"})

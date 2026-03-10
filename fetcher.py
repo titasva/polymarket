@@ -165,16 +165,40 @@ def _parse_pm(m: dict) -> dict | None:
 
 # ── The Odds API ───────────────────────────────────────────────────────────────
 
+def fetch_active_sports(api_key: str) -> list[str]:
+    """
+    Query /v4/sports to get all sports currently in season that have h2h markets.
+    Costs 1 API request. Falls back to TRACKED_SPORTS if the call fails.
+    """
+    _, data = _get(f"{ODDS_API_BASE}/sports", params={"apiKey": api_key, "all": "false"})
+    if not data:
+        log.warning("Could not fetch sports list — using config defaults")
+        return list(TRACKED_SPORTS)
+
+    # Keep only sports with h2h odds (group_id indicates sport family)
+    # Filter out outrights/futures (title contains "Winner", "Champion", etc.)
+    _OUTRIGHT_RE = re.compile(r"\bwinner|champion|outright|season\b", re.IGNORECASE)
+    keys = [
+        s["key"] for s in data
+        if s.get("active") and s.get("has_outrights") is not True
+        and not _OUTRIGHT_RE.search(s.get("title", ""))
+    ]
+    log.info("Active sports from Odds API: %d", len(keys))
+    return keys
+
+
 def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     if not api_key:
         log.warning("No Odds API key — skipping odds fetch")
         return []
 
-    sports_raw = get_setting("tracked_sports", "")
-    sport_list = (
-        [s.strip() for s in sports_raw.split(",") if s.strip()]
-        if sports_raw else TRACKED_SPORTS
-    )
+    # Use user-configured list, or auto-discover active sports
+    sports_raw = get_setting("tracked_sports", "").strip()
+    if sports_raw:
+        sport_list = [s.strip() for s in sports_raw.split(",") if s.strip()]
+        log.info("Using configured sports list (%d sports)", len(sport_list))
+    else:
+        sport_list = fetch_active_sports(api_key)
 
     out, remaining = [], None
 

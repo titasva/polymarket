@@ -219,18 +219,27 @@
         <div class="sfield-row">
           <label class="sfield">
             Fetch interval (minutes)
-            <input type="number" id="cfg-interval" value="10" min="1" max="120" />
-            <span class="field-hint">Keep high to preserve free API quota.</span>
+            <input type="number" id="cfg-interval" value="10" min="1" max="1440" />
+            <span class="field-hint">Free tier: 500 req/month. Each fetch uses ~1 req for sport discovery + 1 per sport with live events.</span>
           </label>
           <label class="sfield">
             Min PM volume ($)
-            <input type="number" id="cfg-minvol" value="5000" min="0" />
+            <input type="number" id="cfg-minvol" value="500" min="0" />
           </label>
           <label class="sfield">
             Match threshold (0–1)
-            <input type="number" id="cfg-thresh" value="0.50" min="0.1" max="1" step="0.05" />
+            <input type="number" id="cfg-thresh" value="0.40" min="0.1" max="1" step="0.05" />
           </label>
         </div>
+        <label class="sfield" style="margin-top:0.75rem">
+          Sports to track <span class="muted">(comma-separated slugs, or blank for auto)</span>
+          <input type="text" id="cfg-sports" placeholder="auto — all active sports discovered each fetch" />
+          <span class="field-hint">
+            Leave blank to auto-discover all currently active sports (recommended).
+            Or pin specific slugs: <code>icehockey_nhl,basketball_nba,soccer_epl</code>.
+            Full list at <a href="https://the-odds-api.com/sports-odds-data/sports-apis.html" target="_blank" style="color:var(--accent)">the-odds-api.com</a>.
+          </span>
+        </label>
       </div>
 
       <div class="settings-actions">

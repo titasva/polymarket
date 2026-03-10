@@ -354,8 +354,9 @@ async function loadConfig() {
 
   // Fetch & Matching
   document.getElementById("cfg-interval").value = cfg.fetch_interval  || "10";
-  document.getElementById("cfg-minvol").value   = cfg.min_volume       || "5000";
-  document.getElementById("cfg-thresh").value   = cfg.match_threshold  || "0.50";
+  document.getElementById("cfg-minvol").value   = cfg.min_volume       || "500";
+  document.getElementById("cfg-thresh").value   = cfg.match_threshold  || "0.40";
+  document.getElementById("cfg-sports").value   = cfg.tracked_sports   || "";
 }
 
 document.getElementById("btn-save").addEventListener("click", async () => {
@@ -371,6 +372,7 @@ document.getElementById("btn-save").addEventListener("click", async () => {
     fetch_interval:   document.getElementById("cfg-interval").value,
     min_volume:       document.getElementById("cfg-minvol").value,
     match_threshold:  document.getElementById("cfg-thresh").value,
+    tracked_sports:   document.getElementById("cfg-sports").value.trim(),
   };
 
   const oddsKey = document.getElementById("cfg-odds-key").value.trim();
