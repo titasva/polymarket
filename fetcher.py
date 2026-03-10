@@ -70,7 +70,7 @@ def _get(url, params=None):
 # ── Polymarket ─────────────────────────────────────────────────────────────────
 
 def fetch_pm_markets() -> list[dict]:
-    log.info("Fetching Polymarket markets …")
+    log.info("Fetching Polymarket markets (sports only) …")
     out, offset, batch = [], 0, 100
     while len(out) < PM_MARKET_LIMIT:
         _, data = _get(
@@ -79,6 +79,7 @@ def fetch_pm_markets() -> list[dict]:
                 "active": "true", "closed": "false",
                 "limit": batch, "offset": offset,
                 "order": "volume", "ascending": "false",
+                "tag_slug": "sports",
             },
         )
         if not data:
@@ -411,6 +412,25 @@ def fetch_all() -> None:
 
     set_setting("last_fetch", datetime.utcnow().isoformat())
     log.info("Matched %d/%d  |  %d with positive edge", matched, len(markets), edges)
+
+    # Diagnostic: when nothing matched, show each h2h question with its best score
+    if matched == 0 and h2h_count > 0 and events:
+        from arb_engine import match_score as _ms
+        log.info("── Diagnostic: h2h questions vs best sportsbook match ──")
+        for pm in markets:
+            if _h2h(pm["question"]) is None:
+                continue
+            best_sc, best_ev = 0.0, None
+            for ev in events:
+                sc = _ms(pm["question"], ev.get("home_team", ""), ev.get("away_team", ""))
+                if sc > best_sc:
+                    best_sc, best_ev = sc, ev
+            log.info("  %.3f  PM: %s  →  book: %s vs %s",
+                     best_sc, pm["question"][:70],
+                     best_ev["home_team"] if best_ev else "?",
+                     best_ev["away_team"] if best_ev else "?")
+        log.info("── End diagnostic (threshold=%.2f) ──", threshold)
+
     log.info("═══ Fetch cycle done  ═══")
 
 

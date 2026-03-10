@@ -16,15 +16,13 @@ TRACKED_SPORTS = [
     "soccer_uefa_champs_league",
     "soccer_usa_mls",
     "mma_mixed_martial_arts",
-    "tennis_atp",
-    "tennis_wta",
 ]
 
 DEFAULT_BOOKMAKERS    = "pinnacle"
 DEFAULT_FETCH_MIN     = 10       # minutes between fetches
 MIN_VOLUME            = 1_000    # minimum Polymarket $ volume
 PM_MARKET_LIMIT       = 500      # max markets to fetch per cycle
-MATCH_THRESHOLD       = 0.50     # fuzzy match confidence (0–1)
+MATCH_THRESHOLD       = 0.40     # fuzzy match confidence (0–1)
 
 # Betting defaults
 DEFAULT_BET_SIZE      = 10.0     # USDC per bet
