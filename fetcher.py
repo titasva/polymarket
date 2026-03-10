@@ -9,6 +9,7 @@ Run standalone:  python fetcher.py
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
