@@ -22,8 +22,8 @@ TRACKED_SPORTS = [
 
 DEFAULT_BOOKMAKERS    = "pinnacle"
 DEFAULT_FETCH_MIN     = 10       # minutes between fetches
-MIN_VOLUME            = 5_000    # minimum Polymarket $ volume
-PM_MARKET_LIMIT       = 300      # max markets to fetch per cycle
+MIN_VOLUME            = 1_000    # minimum Polymarket $ volume
+PM_MARKET_LIMIT       = 500      # max markets to fetch per cycle
 MATCH_THRESHOLD       = 0.50     # fuzzy match confidence (0–1)
 
 # Betting defaults

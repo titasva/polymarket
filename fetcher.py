@@ -374,6 +374,9 @@ def fetch_all() -> None:
 
     # 3. Match, calculate edge, optionally auto-bet
     from bettor import maybe_place_bet
+    from arb_engine import extract_h2h_teams as _h2h
+    h2h_count = sum(1 for m in markets if _h2h(m["question"]) is not None)
+    log.info("H2H-matchable PM markets: %d / %d (others are futures/props/crypto)", h2h_count, len(markets))
     matched = edges = 0
 
     for pm in markets:
