@@ -82,7 +82,12 @@ def _get_client(private_key: str):
 
 
 # Polymarket on Polygon — contract addresses
-_POLYGON_RPC        = "https://polygon-rpc.com"
+_POLYGON_RPCS = [
+    "https://polygon.llamarpc.com",
+    "https://rpc.ankr.com/polygon",
+    "https://polygon-mainnet.public.blastapi.io",
+    "https://rpc-mainnet.maticvigil.com",
+]
 _USDC_ADDRESS       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"   # USDC.e
 _CTF_EXCHANGE       = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"   # CLOB exchange
 _NEG_RISK_ADAPTER   = "0xd91E80cF2eA9d73cC994E963fA2B1d26BfC78b39"   # NegRisk adapter
@@ -131,7 +136,20 @@ def _on_chain_approve(private_key: str) -> None:
         log.warning("  web3 not installed — run: pip install web3")
         return
 
-    w3   = Web3(Web3.HTTPProvider(_POLYGON_RPC))
+    w3 = None
+    for rpc in _POLYGON_RPCS:
+        candidate = Web3(Web3.HTTPProvider(rpc))
+        try:
+            candidate.eth.block_number  # quick connectivity test
+            w3 = candidate
+            log.info("  Connected to Polygon via %s", rpc)
+            break
+        except Exception:
+            log.debug("  RPC %s unreachable, trying next …", rpc)
+    if w3 is None:
+        log.error("  All Polygon RPCs failed — cannot send approval tx")
+        return
+
     acct = Account.from_key(private_key)
     addr = acct.address
 
