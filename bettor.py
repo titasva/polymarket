@@ -127,7 +127,7 @@ _ERC1155_ABI = [
 
 
 def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
-    nonce     = w3.eth.get_transaction_count(addr)
+    nonce     = w3.eth.get_transaction_count(addr, "pending")
     gas_price = w3.eth.gas_price
     tx        = contract_fn.build_transaction({
         "from": addr, "nonce": nonce,
