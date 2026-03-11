@@ -81,13 +81,44 @@ def _get_client(private_key: str):
     return client
 
 
-def _check_balance(client, size_usdc: float) -> bool:
+def _ensure_allowance(client) -> None:
     """
-    Returns True if the wallet has enough USDC allowance/balance for the bet.
-    Logs the actual balance so the user knows what's available.
+    If the CLOB exchange allowance is zero, approve the maximum amount so
+    the exchange contract can spend the wallet's USDC.  This is a one-time
+    on-chain transaction (costs a tiny bit of POL for gas).
     """
     try:
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        resp = client.get_balance_allowance(
+            params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        )
+        allowance = float(resp.get("allowance", 0))
+        if allowance == 0:
+            log.info("  Allowance is 0 — approving CLOB exchange contract for USDC …")
+            client.update_balance_allowance(
+                params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            )
+            log.info("  Approval transaction sent. Re-checking allowance …")
+            resp2 = client.get_balance_allowance(
+                params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            )
+            new_allowance = float(resp2.get("allowance", 0))
+            log.info("  New allowance: $%.2f", new_allowance)
+    except Exception as exc:
+        log.warning("  Could not set allowance (will attempt order anyway): %s", exc)
+
+
+def _check_balance(client, size_usdc: float) -> bool:
+    """
+    Returns True if the wallet has enough USDC allowance/balance for the bet.
+    Automatically approves the exchange contract if allowance is zero.
+    """
+    try:
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+
+        # Auto-approve if needed before checking
+        _ensure_allowance(client)
+
         resp = client.get_balance_allowance(
             params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         )
@@ -100,8 +131,8 @@ def _check_balance(client, size_usdc: float) -> bool:
             log.error(
                 "  Insufficient funds: need $%.2f but usable USDC is $%.2f "
                 "(balance=$%.2f, allowance=$%.2f). "
-                "Deposit USDC on Polymarket (polymarket.com → Profile → Deposit) "
-                "or approve the exchange contract.",
+                "Send USDC to your CLOB wallet on Polygon and ensure POL "
+                "is available for gas.",
                 size_usdc, usable, balance, allowance,
             )
             return False
