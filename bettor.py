@@ -196,13 +196,17 @@ def _on_chain_approve(private_key: str) -> None:
     for label, spender in _EXCHANGE_CONTRACTS:
         sp = Web3.to_checksum_address(spender)
 
-        # ERC-20: USDC.e approval
-        if usdc_e.functions.allowance(addr, sp).call() > 0:
-            log.info("  USDC.e → %s: already approved", label)
-        else:
-            log.info("  Approving USDC.e → %s …", label)
-            _send_tx(w3, usdc_e.functions.approve(sp, _MAX_UINT256), addr, private_key,
-                     f"USDC.e → {label}")
+        # ERC-20: approve whichever USDC tokens the wallet actually holds
+        for token_label, token_contract in [("USDC.e", usdc_e), ("native USDC", usdc_n)]:
+            bal = token_contract.functions.balanceOf(addr).call()
+            if bal == 0:
+                continue  # skip if wallet doesn't hold this token
+            if token_contract.functions.allowance(addr, sp).call() > 0:
+                log.info("  %s → %s: already approved", token_label, label)
+            else:
+                log.info("  Approving %s → %s …", token_label, label)
+                _send_tx(w3, token_contract.functions.approve(sp, _MAX_UINT256), addr, private_key,
+                         f"{token_label} → {label}")
 
         # ERC-1155: Conditional Token approval
         if ct.functions.isApprovedForAll(addr, sp).call():
