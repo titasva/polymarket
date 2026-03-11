@@ -81,11 +81,103 @@ def _get_client(private_key: str):
     return client
 
 
-def _ensure_allowance(client) -> None:
+# Polymarket on Polygon — contract addresses
+_POLYGON_RPC        = "https://polygon-rpc.com"
+_USDC_ADDRESS       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"   # USDC.e
+_CTF_EXCHANGE       = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"   # CLOB exchange
+_NEG_RISK_ADAPTER   = "0xd91E80cF2eA9d73cC994E963fA2B1d26BfC78b39"   # NegRisk adapter
+_MAX_UINT256        = 2**256 - 1
+
+_ERC20_APPROVE_ABI = [
+    {
+        "name": "approve",
+        "type": "function",
+        "inputs": [
+            {"name": "spender", "type": "address"},
+            {"name": "amount",  "type": "uint256"},
+        ],
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "nonpayable",
+    },
+    {
+        "name": "allowance",
+        "type": "function",
+        "inputs": [
+            {"name": "owner",   "type": "address"},
+            {"name": "spender", "type": "address"},
+        ],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "inputs": [{"name": "account", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
+]
+
+
+def _on_chain_approve(private_key: str) -> None:
     """
-    If the CLOB exchange allowance is zero, approve the maximum amount so
-    the exchange contract can spend the wallet's USDC.  This is a one-time
-    on-chain transaction (costs a tiny bit of POL for gas).
+    Send an on-chain ERC-20 approve() transaction so the CTF Exchange (and
+    NegRisk adapter) can spend the wallet's USDC.  Needs a tiny POL for gas.
+    """
+    try:
+        from web3 import Web3
+        from eth_account import Account
+    except ImportError:
+        log.warning("  web3 not installed — run: pip install web3")
+        return
+
+    w3   = Web3(Web3.HTTPProvider(_POLYGON_RPC))
+    acct = Account.from_key(private_key)
+    addr = acct.address
+
+    usdc = w3.eth.contract(
+        address=Web3.to_checksum_address(_USDC_ADDRESS),
+        abi=_ERC20_APPROVE_ABI,
+    )
+
+    raw_balance = usdc.functions.balanceOf(addr).call()
+    log.info("  On-chain USDC balance: $%.2f", raw_balance / 1e6)
+
+    for spender_label, spender in [
+        ("CTF Exchange", _CTF_EXCHANGE),
+        ("NegRisk Adapter", _NEG_RISK_ADAPTER),
+    ]:
+        spender_cs = Web3.to_checksum_address(spender)
+        current = usdc.functions.allowance(addr, spender_cs).call()
+        if current > 0:
+            log.info("  %s already approved (allowance=%d)", spender_label, current)
+            continue
+
+        log.info("  Approving %s …", spender_label)
+        nonce = w3.eth.get_transaction_count(addr)
+        gas_price = w3.eth.gas_price
+
+        tx = usdc.functions.approve(spender_cs, _MAX_UINT256).build_transaction({
+            "from":     addr,
+            "nonce":    nonce,
+            "gas":      100_000,
+            "gasPrice": gas_price,
+            "chainId":  137,
+        })
+        signed = w3.eth.account.sign_transaction(tx, private_key)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        log.info("  Approval tx sent: 0x%s — waiting for confirmation …", tx_hash.hex())
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        if receipt.status == 1:
+            log.info("  %s approved successfully (block %d)", spender_label, receipt.blockNumber)
+        else:
+            log.error("  Approval tx reverted for %s", spender_label)
+
+
+def _ensure_allowance(client, private_key: str = "") -> None:
+    """
+    Check CLOB-reported allowance; if zero, send a real on-chain approve()
+    instead of relying on the CLOB API endpoint (which is only informational).
     """
     try:
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
@@ -94,21 +186,16 @@ def _ensure_allowance(client) -> None:
         )
         allowance = float(resp.get("allowance", 0))
         if allowance == 0:
-            log.info("  Allowance is 0 — approving CLOB exchange contract for USDC …")
-            client.update_balance_allowance(
-                params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-            )
-            log.info("  Approval transaction sent. Re-checking allowance …")
-            resp2 = client.get_balance_allowance(
-                params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-            )
-            new_allowance = float(resp2.get("allowance", 0))
-            log.info("  New allowance: $%.2f", new_allowance)
+            log.info("  Allowance is 0 — sending on-chain approve() …")
+            if private_key:
+                _on_chain_approve(private_key)
+            else:
+                log.warning("  No private key available for on-chain approval")
     except Exception as exc:
         log.warning("  Could not set allowance (will attempt order anyway): %s", exc)
 
 
-def _check_balance(client, size_usdc: float) -> bool:
+def _check_balance(client, size_usdc: float, private_key: str = "") -> bool:
     """
     Returns True if the wallet has enough USDC allowance/balance for the bet.
     Automatically approves the exchange contract if allowance is zero.
@@ -117,7 +204,7 @@ def _check_balance(client, size_usdc: float) -> bool:
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
 
         # Auto-approve if needed before checking
-        _ensure_allowance(client)
+        _ensure_allowance(client, private_key)
 
         resp = client.get_balance_allowance(
             params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
@@ -224,7 +311,7 @@ def maybe_place_bet(
 
         client = _get_client(private_key)
 
-        if not _check_balance(client, size_usdc):
+        if not _check_balance(client, size_usdc, private_key):
             _record_bet(pm_id, question, event_name, bookmaker,
                         side, pm_price, book_implied, edge_pct,
                         size_usdc, token_id, "", "FAILED",
