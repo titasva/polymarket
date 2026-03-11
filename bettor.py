@@ -71,14 +71,37 @@ def _get_client(private_key: str):
         )
     client = ClobClient(CLOB_HOST, key=private_key, chain_id=POLYGON_CHAIN_ID)
     client.set_api_creds(client.create_or_derive_api_creds())
-    # Ensure USDC spending is approved for both CTF exchange contracts.
-    # This is a no-op if already approved; costs negligible gas on Polygon.
-    try:
-        client.approve_allowances()
-        log.debug("CLOB allowances approved/confirmed")
-    except Exception as exc:
-        log.warning("Could not approve CLOB allowances: %s", exc)
     return client
+
+
+def _check_balance(client, size_usdc: float) -> bool:
+    """
+    Returns True if the wallet has enough USDC allowance/balance for the bet.
+    Logs the actual balance so the user knows what's available.
+    """
+    try:
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        resp = client.get_balance_allowance(
+            params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        )
+        # Response keys: "balance", "allowance" (both as decimal strings)
+        balance = float(resp.get("balance", 0))
+        allowance = float(resp.get("allowance", 0))
+        log.info("  Wallet USDC — balance: $%.2f | allowance: $%.2f", balance, allowance)
+        usable = min(balance, allowance)
+        if usable < size_usdc:
+            log.error(
+                "  Insufficient funds: need $%.2f but usable USDC is $%.2f "
+                "(balance=$%.2f, allowance=$%.2f). "
+                "Deposit USDC on Polymarket (polymarket.com → Profile → Deposit) "
+                "or approve the exchange contract.",
+                size_usdc, usable, balance, allowance,
+            )
+            return False
+        return True
+    except Exception as exc:
+        log.warning("  Could not check balance (will try order anyway): %s", exc)
+        return True  # don't block the order if the check itself fails
 
 
 # ── Core bet placement ─────────────────────────────────────────────────────────
@@ -162,6 +185,13 @@ def maybe_place_bet(
         from py_clob_client.order_builder.constants import BUY
 
         client = _get_client(private_key)
+
+        if not _check_balance(client, size_usdc):
+            _record_bet(pm_id, question, event_name, bookmaker,
+                        side, pm_price, book_implied, edge_pct,
+                        size_usdc, token_id, "", "FAILED",
+                        "Insufficient USDC balance/allowance")
+            return
 
         # Place a limit order slightly above market price for better fill odds
         limit_price = round(min(pm_price + 0.02, 0.97), 4)
