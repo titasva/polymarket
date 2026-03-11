@@ -82,52 +82,70 @@ def _get_client(private_key: str):
 
 
 # Polymarket on Polygon — contract addresses
+# Source: https://github.com/Polymarket/py-clob-client#setting-allowances
 _POLYGON_RPCS = [
     "https://polygon.llamarpc.com",
     "https://rpc.ankr.com/polygon",
     "https://polygon-mainnet.public.blastapi.io",
     "https://rpc-mainnet.maticvigil.com",
 ]
-_USDC_ADDRESS       = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"   # USDC.e
-_CTF_EXCHANGE       = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"   # CLOB exchange
-_NEG_RISK_ADAPTER   = "0xd91E80cF2eA9d73cC994E963fA2B1d26BfC78b39"   # NegRisk adapter
-_MAX_UINT256        = 2**256 - 1
+_USDC_E_ADDRESS  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"   # USDC.e (bridged) — what Polymarket uses
+_USDC_N_ADDRESS  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"   # native USDC (for balance diagnostic only)
+_CTF_ADDRESS     = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"   # Conditional Tokens (ERC-1155)
 
-_ERC20_APPROVE_ABI = [
-    {
-        "name": "approve",
-        "type": "function",
-        "inputs": [
-            {"name": "spender", "type": "address"},
-            {"name": "amount",  "type": "uint256"},
-        ],
-        "outputs": [{"name": "", "type": "bool"}],
-        "stateMutability": "nonpayable",
-    },
-    {
-        "name": "allowance",
-        "type": "function",
-        "inputs": [
-            {"name": "owner",   "type": "address"},
-            {"name": "spender", "type": "address"},
-        ],
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-    },
-    {
-        "name": "balanceOf",
-        "type": "function",
-        "inputs": [{"name": "account", "type": "address"}],
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-    },
+# Three exchange contracts that need approval for BOTH USDC.e AND Conditional Tokens
+_EXCHANGE_CONTRACTS = [
+    ("CTF Exchange",        "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"),
+    ("NegRisk CTF Exchange","0xC5d563A36AE78145C45a50134d48A1215220f80a"),
+    ("NegRisk Adapter",     "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"),
 ]
+_MAX_UINT256 = 2**256 - 1
+
+_ERC20_ABI = [
+    {"name": "approve",   "type": "function", "stateMutability": "nonpayable",
+     "inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
+     "outputs": [{"name": "", "type": "bool"}]},
+    {"name": "allowance", "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
+     "outputs": [{"name": "", "type": "uint256"}]},
+    {"name": "balanceOf", "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "account", "type": "address"}],
+     "outputs": [{"name": "", "type": "uint256"}]},
+]
+
+_ERC1155_ABI = [
+    {"name": "setApprovalForAll", "type": "function", "stateMutability": "nonpayable",
+     "inputs": [{"name": "operator", "type": "address"}, {"name": "approved", "type": "bool"}],
+     "outputs": []},
+    {"name": "isApprovedForAll", "type": "function", "stateMutability": "view",
+     "inputs": [{"name": "account", "type": "address"}, {"name": "operator", "type": "address"}],
+     "outputs": [{"name": "", "type": "bool"}]},
+]
+
+
+def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
+    nonce     = w3.eth.get_transaction_count(addr)
+    gas_price = w3.eth.gas_price
+    tx        = contract_fn.build_transaction({
+        "from": addr, "nonce": nonce,
+        "gas": 100_000, "gasPrice": gas_price, "chainId": 137,
+    })
+    signed   = w3.eth.account.sign_transaction(tx, private_key)
+    tx_hash  = w3.eth.send_raw_transaction(signed.raw_transaction)
+    log.info("  %s tx: 0x%s — waiting …", label, tx_hash.hex())
+    receipt  = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    if receipt.status == 1:
+        log.info("  %s confirmed (block %d)", label, receipt.blockNumber)
+    else:
+        log.error("  %s tx REVERTED", label)
 
 
 def _on_chain_approve(private_key: str) -> None:
     """
-    Send an on-chain ERC-20 approve() transaction so the CTF Exchange (and
-    NegRisk adapter) can spend the wallet's USDC.  Needs a tiny POL for gas.
+    Approve all 6 required combinations so Polymarket can trade:
+      - USDC.e  → CTF Exchange, NegRisk CTF Exchange, NegRisk Adapter  (ERC-20 approve)
+      - Cond.Tokens → same 3 contracts                                  (ERC-1155 setApprovalForAll)
+    Needs a tiny POL for gas (6 txs total, ~0.001 POL).
     """
     try:
         from web3 import Web3
@@ -140,56 +158,51 @@ def _on_chain_approve(private_key: str) -> None:
     for rpc in _POLYGON_RPCS:
         candidate = Web3(Web3.HTTPProvider(rpc))
         try:
-            candidate.eth.block_number  # quick connectivity test
+            candidate.eth.block_number
             w3 = candidate
             log.info("  Connected to Polygon via %s", rpc)
             break
         except Exception:
             log.debug("  RPC %s unreachable, trying next …", rpc)
     if w3 is None:
-        log.error("  All Polygon RPCs failed — cannot send approval tx")
+        log.error("  All Polygon RPCs failed — cannot send approval txs")
         return
 
     acct = Account.from_key(private_key)
     addr = acct.address
 
-    usdc = w3.eth.contract(
-        address=Web3.to_checksum_address(_USDC_ADDRESS),
-        abi=_ERC20_APPROVE_ABI,
-    )
+    usdc_e = w3.eth.contract(address=Web3.to_checksum_address(_USDC_E_ADDRESS), abi=_ERC20_ABI)
+    usdc_n = w3.eth.contract(address=Web3.to_checksum_address(_USDC_N_ADDRESS), abi=_ERC20_ABI)
+    ct     = w3.eth.contract(address=Web3.to_checksum_address(_CTF_ADDRESS),    abi=_ERC1155_ABI)
 
-    raw_balance = usdc.functions.balanceOf(addr).call()
-    log.info("  On-chain USDC balance: $%.2f", raw_balance / 1e6)
+    bal_e = usdc_e.functions.balanceOf(addr).call()
+    bal_n = usdc_n.functions.balanceOf(addr).call()
+    log.info("  On-chain USDC.e (bridged): $%.2f | native USDC: $%.2f", bal_e / 1e6, bal_n / 1e6)
+    if bal_e == 0 and bal_n > 0:
+        log.warning(
+            "  You have native USDC ($%.2f) but Polymarket requires USDC.e. "
+            "Swap on Uniswap/Quickswap: native USDC → USDC.e on Polygon.",
+            bal_n / 1e6,
+        )
 
-    for spender_label, spender in [
-        ("CTF Exchange", _CTF_EXCHANGE),
-        ("NegRisk Adapter", _NEG_RISK_ADAPTER),
-    ]:
-        spender_cs = Web3.to_checksum_address(spender)
-        current = usdc.functions.allowance(addr, spender_cs).call()
-        if current > 0:
-            log.info("  %s already approved (allowance=%d)", spender_label, current)
-            continue
+    for label, spender in _EXCHANGE_CONTRACTS:
+        sp = Web3.to_checksum_address(spender)
 
-        log.info("  Approving %s …", spender_label)
-        nonce = w3.eth.get_transaction_count(addr)
-        gas_price = w3.eth.gas_price
-
-        tx = usdc.functions.approve(spender_cs, _MAX_UINT256).build_transaction({
-            "from":     addr,
-            "nonce":    nonce,
-            "gas":      100_000,
-            "gasPrice": gas_price,
-            "chainId":  137,
-        })
-        signed = w3.eth.account.sign_transaction(tx, private_key)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-        log.info("  Approval tx sent: 0x%s — waiting for confirmation …", tx_hash.hex())
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-        if receipt.status == 1:
-            log.info("  %s approved successfully (block %d)", spender_label, receipt.blockNumber)
+        # ERC-20: USDC.e approval
+        if usdc_e.functions.allowance(addr, sp).call() > 0:
+            log.info("  USDC.e → %s: already approved", label)
         else:
-            log.error("  Approval tx reverted for %s", spender_label)
+            log.info("  Approving USDC.e → %s …", label)
+            _send_tx(w3, usdc_e.functions.approve(sp, _MAX_UINT256), addr, private_key,
+                     f"USDC.e → {label}")
+
+        # ERC-1155: Conditional Token approval
+        if ct.functions.isApprovedForAll(addr, sp).call():
+            log.info("  Cond.Tokens → %s: already approved", label)
+        else:
+            log.info("  Approving Cond.Tokens → %s …", label)
+            _send_tx(w3, ct.functions.setApprovalForAll(sp, True), addr, private_key,
+                     f"CT → {label}")
 
 
 def _ensure_allowance(client, private_key: str = "") -> None:
