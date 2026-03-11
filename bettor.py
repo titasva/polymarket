@@ -71,6 +71,13 @@ def _get_client(private_key: str):
         )
     client = ClobClient(CLOB_HOST, key=private_key, chain_id=POLYGON_CHAIN_ID)
     client.set_api_creds(client.create_or_derive_api_creds())
+    # Ensure USDC spending is approved for both CTF exchange contracts.
+    # This is a no-op if already approved; costs negligible gas on Polygon.
+    try:
+        client.approve_allowances()
+        log.debug("CLOB allowances approved/confirmed")
+    except Exception as exc:
+        log.warning("Could not approve CLOB allowances: %s", exc)
     return client
 
 
@@ -179,7 +186,16 @@ def maybe_place_bet(
                         f"No orderID in response: {resp}")
 
     except Exception as exc:
-        log.error("Bet failed for %s: %s", pm_id, exc)
+        err_str = str(exc)
+        if "balance" in err_str.lower() or "allowance" in err_str.lower():
+            log.error(
+                "Bet failed for %s — insufficient USDC balance or allowance. "
+                "Fund your wallet with USDC on Polygon and ensure the CLOB "
+                "exchange is approved. Error: %s",
+                pm_id, exc,
+            )
+        else:
+            log.error("Bet failed for %s: %s", pm_id, exc)
         _record_bet(pm_id, question, event_name, bookmaker,
                     side, pm_price, book_implied, edge_pct,
-                    size_usdc, token_id, "", "FAILED", str(exc))
+                    size_usdc, token_id, "", "FAILED", err_str)
