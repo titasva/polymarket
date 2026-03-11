@@ -71,6 +71,13 @@ def _get_client(private_key: str):
         )
     client = ClobClient(CLOB_HOST, key=private_key, chain_id=POLYGON_CHAIN_ID)
     client.set_api_creds(client.create_or_derive_api_creds())
+    # Log the wallet address so it can be verified against the Polymarket account
+    try:
+        from eth_account import Account
+        addr = Account.from_key(private_key).address
+        log.info("  CLOB wallet address: %s", addr)
+    except Exception:
+        pass
     return client
 
 
