@@ -87,7 +87,10 @@ _POLYGON_RPCS = [
     "https://polygon.llamarpc.com",
     "https://rpc.ankr.com/polygon",
     "https://polygon-mainnet.public.blastapi.io",
+    "https://1rpc.io/matic",
+    "https://polygon.drpc.org",
     "https://rpc-mainnet.maticvigil.com",
+    "https://matic-mainnet.chainstacklabs.com",
 ]
 _USDC_E_ADDRESS  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"   # USDC.e (bridged) — what Polymarket uses
 _USDC_N_ADDRESS  = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"   # native USDC (for balance diagnostic only)
@@ -154,16 +157,21 @@ def _on_chain_approve(private_key: str) -> None:
         log.warning("  web3 not installed — run: pip install web3")
         return
 
+    import requests
+    session = requests.Session()
+    session.headers.update({"User-Agent": "python-web3/polymarket-bot"})
+
     w3 = None
     for rpc in _POLYGON_RPCS:
-        candidate = Web3(Web3.HTTPProvider(rpc))
+        provider = Web3.HTTPProvider(rpc, session=session)
+        candidate = Web3(provider)
         try:
-            candidate.eth.block_number
+            block = candidate.eth.block_number
             w3 = candidate
-            log.info("  Connected to Polygon via %s", rpc)
+            log.info("  Connected to Polygon via %s (block %d)", rpc, block)
             break
-        except Exception:
-            log.debug("  RPC %s unreachable, trying next …", rpc)
+        except Exception as e:
+            log.warning("  RPC %s failed: %s", rpc, e)
     if w3 is None:
         log.error("  All Polygon RPCs failed — cannot send approval txs")
         return
