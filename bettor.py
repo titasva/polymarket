@@ -136,7 +136,7 @@ def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
     signed   = w3.eth.account.sign_transaction(tx, private_key)
     tx_hash  = w3.eth.send_raw_transaction(signed.raw_transaction)
     log.info("  %s tx: 0x%s — waiting …", label, tx_hash.hex())
-    receipt  = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    receipt  = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120, poll_latency=5)
     if receipt.status == 1:
         log.info("  %s confirmed (block %d)", label, receipt.blockNumber)
     else:
