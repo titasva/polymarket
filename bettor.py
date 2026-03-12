@@ -127,12 +127,11 @@ _ERC1155_ABI = [
 
 
 def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
-    from web3 import Web3
-    nonce = w3.eth.get_transaction_count(addr, "pending")
-    # Use EIP-1559 with generous fees so the tx mines quickly on Polygon
-    base_fee       = w3.eth.get_block("latest")["baseFeePerGas"]
-    priority_fee   = w3.to_wei(40, "gwei")          # tip to validator
-    max_fee        = base_fee * 3 + priority_fee     # headroom for fee spikes
+    # Use the CONFIRMED nonce (not pending) so we replace any stuck pending txs
+    nonce        = w3.eth.get_transaction_count(addr, "latest")
+    # Very high fixed gas price — guarantees fast mining and replaces stuck txs
+    priority_fee = w3.to_wei(100, "gwei")
+    max_fee      = w3.to_wei(300, "gwei")
     tx = contract_fn.build_transaction({
         "from": addr, "nonce": nonce, "gas": 120_000,
         "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee,
@@ -141,7 +140,7 @@ def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
     signed  = w3.eth.account.sign_transaction(tx, private_key)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
     log.info("  %s tx: 0x%s — waiting …", label, tx_hash.hex())
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=5)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120, poll_latency=3)
     if receipt.status == 1:
         log.info("  %s confirmed (block %d)", label, receipt.blockNumber)
     else:
