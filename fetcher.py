@@ -219,6 +219,7 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
         return []
 
     # Priority: user-configured list > productive cache > full active scan
+    use_cache  = False
     sports_raw = get_setting("tracked_sports", "").strip()
     if sports_raw:
         sport_list = [s.strip() for s in sports_raw.split(",") if s.strip()]
@@ -226,7 +227,6 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     else:
         productive_raw = get_setting("productive_sports", "")
         productive_at  = get_setting("productive_sports_at", "")
-        use_cache = False
         if productive_raw and productive_at:
             try:
                 age_h = (datetime.now(timezone.utc) -
@@ -273,7 +273,10 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     # Persist which sports had events (used to skip empty sports next cycle)
     if productive:
         set_setting("productive_sports", json.dumps(productive))
-        set_setting("productive_sports_at", datetime.now(timezone.utc).isoformat())
+        if not use_cache:
+            # Only reset the TTL timestamp when we actually did a full rescan,
+            # so the 24-hour expiry isn't reset on every fetch cycle.
+            set_setting("productive_sports_at", datetime.now(timezone.utc).isoformat())
 
     if remaining is not None:
         set_setting("odds_api_remaining", str(remaining))
