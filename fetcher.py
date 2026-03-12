@@ -433,10 +433,11 @@ def _save_match_edge(pm: dict, ev: dict, score: float, yih: bool, edge: dict) ->
 def fetch_all() -> None:
     log.info("═══ Fetch cycle start ═══")
 
-    api_key    = get_setting("odds_api_key")
-    bookmakers = get_setting("bookmakers", DEFAULT_BOOKMAKERS)
-    threshold  = float(get_setting("match_threshold", str(MATCH_THRESHOLD)))
-    min_vol    = float(get_setting("min_volume", str(MIN_VOLUME)))
+    api_key        = get_setting("odds_api_key")
+    bookmakers     = get_setting("bookmakers", DEFAULT_BOOKMAKERS)
+    threshold      = float(get_setting("match_threshold", str(MATCH_THRESHOLD)))
+    bet_min_conf   = float(get_setting("bet_min_confidence", "0.75"))
+    min_vol        = float(get_setting("min_volume", str(MIN_VOLUME)))
 
     # 1. Polymarket
     raw      = fetch_pm_markets()
@@ -470,6 +471,10 @@ def fetch_all() -> None:
 
         if edge["best_side"] and edge["best_edge"] > 0:
             edges += 1
+            if score < bet_min_conf:
+                log.info("  Skip bet (conf %.0f%% < %.0f%% required): %s",
+                         score * 100, bet_min_conf * 100, pm["question"])
+                continue
             token_id = (
                 pm["yes_token_id"] if edge["best_side"] == "YES"
                 else pm["no_token_id"]

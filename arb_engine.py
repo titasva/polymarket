@@ -123,7 +123,8 @@ def match_score(question: str, home_team: str, away_team: str) -> float:
         best, s1, s2 = fwd, fwd_h, fwd_a
     else:
         best, s1, s2 = rev, rev_h, rev_a
-    if min(s1, s2) < 0.40:
+    # Both teams must individually match well — one good match can't carry a bad one
+    if min(s1, s2) < 0.55:
         return 0.0
     return best
 
