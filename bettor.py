@@ -127,16 +127,21 @@ _ERC1155_ABI = [
 
 
 def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
-    nonce     = w3.eth.get_transaction_count(addr, "pending")
-    gas_price = w3.eth.gas_price
-    tx        = contract_fn.build_transaction({
-        "from": addr, "nonce": nonce,
-        "gas": 100_000, "gasPrice": gas_price, "chainId": 137,
+    from web3 import Web3
+    nonce = w3.eth.get_transaction_count(addr, "pending")
+    # Use EIP-1559 with generous fees so the tx mines quickly on Polygon
+    base_fee       = w3.eth.get_block("latest")["baseFeePerGas"]
+    priority_fee   = w3.to_wei(40, "gwei")          # tip to validator
+    max_fee        = base_fee * 3 + priority_fee     # headroom for fee spikes
+    tx = contract_fn.build_transaction({
+        "from": addr, "nonce": nonce, "gas": 120_000,
+        "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee,
+        "chainId": 137, "type": 2,
     })
-    signed   = w3.eth.account.sign_transaction(tx, private_key)
-    tx_hash  = w3.eth.send_raw_transaction(signed.raw_transaction)
+    signed  = w3.eth.account.sign_transaction(tx, private_key)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
     log.info("  %s tx: 0x%s — waiting …", label, tx_hash.hex())
-    receipt  = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120, poll_latency=5)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=5)
     if receipt.status == 1:
         log.info("  %s confirmed (block %d)", label, receipt.blockNumber)
     else:
@@ -253,8 +258,11 @@ def _check_balance(client, size_usdc: float, private_key: str = "") -> bool:
             params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         )
         # Response keys: "balance", "allowance" (both as decimal strings)
-        balance = float(resp.get("balance", 0))
-        allowance = float(resp.get("allowance", 0))
+        raw_balance  = float(resp.get("balance", 0))
+        raw_allowance = float(resp.get("allowance", 0))
+        # CLOB returns raw USDC units (6 decimals); convert to dollars
+        balance   = raw_balance  / 1e6 if raw_balance  > 1000 else raw_balance
+        allowance = raw_allowance / 1e6 if raw_allowance > 1000 else raw_allowance
         log.info("  Wallet USDC — balance: $%.2f | allowance: $%.2f", balance, allowance)
         usable = min(balance, allowance)
         if usable < size_usdc:
