@@ -243,6 +243,12 @@ def _ensure_allowance(client, private_key: str = "") -> None:
             log.info("  Allowance is 0 — sending on-chain approve() …")
             if private_key:
                 _on_chain_approve(private_key)
+                # Tell the CLOB to re-read on-chain state after approvals
+                log.info("  Notifying CLOB to refresh allowance …")
+                client.update_balance_allowance(
+                    params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                )
+                log.info("  CLOB refresh done")
             else:
                 log.warning("  No private key available for on-chain approval")
     except Exception as exc:
