@@ -166,25 +166,47 @@ def _parse_pm(m: dict) -> dict | None:
 
 # ── The Odds API ───────────────────────────────────────────────────────────────
 
+_OUTRIGHT_RE = re.compile(r"\bwinner|champion|outright|season\b", re.IGNORECASE)
+_SPORTS_CACHE_TTL_HOURS = 8  # re-fetch active sports at most 3x per day
+
+
 def fetch_active_sports(api_key: str) -> list[str]:
     """
     Query /v4/sports to get all sports currently in season that have h2h markets.
-    Costs 1 API request. Falls back to TRACKED_SPORTS if the call fails.
+    Costs 1 API request. Result is cached in the DB for _SPORTS_CACHE_TTL_HOURS hours.
+    Falls back to cached list (or TRACKED_SPORTS) if the call fails.
     """
+    # Return cached list if fresh enough
+    cached_sports = get_setting("cached_sports", "")
+    cached_at_str = get_setting("cached_sports_at", "")
+    if cached_sports and cached_at_str:
+        try:
+            cached_at = datetime.fromisoformat(cached_at_str)
+            age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
+            if age_hours < _SPORTS_CACHE_TTL_HOURS:
+                keys = json.loads(cached_sports)
+                log.info("Active sports (cached, %.1fh old): %d", age_hours, len(keys))
+                return keys
+        except Exception:
+            pass
+
     _, data = _get(f"{ODDS_API_BASE}/sports", params={"apiKey": api_key, "all": "false"})
     if not data:
-        log.warning("Could not fetch sports list — using config defaults")
+        log.warning("Could not fetch sports list — using cached/config defaults")
+        if cached_sports:
+            return json.loads(cached_sports)
         return list(TRACKED_SPORTS)
 
-    # Keep only sports with h2h odds (group_id indicates sport family)
-    # Filter out outrights/futures (title contains "Winner", "Champion", etc.)
-    _OUTRIGHT_RE = re.compile(r"\bwinner|champion|outright|season\b", re.IGNORECASE)
     keys = [
         s["key"] for s in data
         if s.get("active") and s.get("has_outrights") is not True
         and not _OUTRIGHT_RE.search(s.get("title", ""))
     ]
     log.info("Active sports from Odds API: %d", len(keys))
+
+    set_setting("cached_sports", json.dumps(keys))
+    set_setting("cached_sports_at", datetime.now(timezone.utc).isoformat())
+
     return keys
 
 
