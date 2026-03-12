@@ -257,39 +257,25 @@ def _ensure_allowance(client, private_key: str = "") -> None:
 
 def _check_balance(client, size_usdc: float, private_key: str = "") -> bool:
     """
-    Returns True if the wallet has enough USDC allowance/balance for the bet.
-    Automatically approves the exchange contract if allowance is zero.
+    Log CLOB-reported balance/allowance for diagnostics, run on-chain approvals
+    if needed, then let the order attempt proceed regardless (the CLOB itself
+    will reject with a meaningful error if funds are truly unavailable).
     """
     try:
         from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-
-        # Auto-approve if needed before checking
         _ensure_allowance(client, private_key)
-
         resp = client.get_balance_allowance(
             params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         )
-        # Response keys: "balance", "allowance" (both as decimal strings)
-        raw_balance  = float(resp.get("balance", 0))
+        raw_balance   = float(resp.get("balance", 0))
         raw_allowance = float(resp.get("allowance", 0))
-        # CLOB returns raw USDC units (6 decimals); convert to dollars
-        balance   = raw_balance  / 1e6 if raw_balance  > 1000 else raw_balance
+        balance   = raw_balance   / 1e6 if raw_balance   > 1000 else raw_balance
         allowance = raw_allowance / 1e6 if raw_allowance > 1000 else raw_allowance
-        log.info("  Wallet USDC — balance: $%.2f | allowance: $%.2f", balance, allowance)
-        usable = min(balance, allowance)
-        if usable < size_usdc:
-            log.error(
-                "  Insufficient funds: need $%.2f but usable USDC is $%.2f "
-                "(balance=$%.2f, allowance=$%.2f). "
-                "Send USDC to your CLOB wallet on Polygon and ensure POL "
-                "is available for gas.",
-                size_usdc, usable, balance, allowance,
-            )
-            return False
-        return True
+        log.info("  Wallet USDC — balance: $%.2f | allowance: $%.2f (raw: %s / %s)",
+                 balance, allowance, raw_balance, raw_allowance)
     except Exception as exc:
-        log.warning("  Could not check balance (will try order anyway): %s", exc)
-        return True  # don't block the order if the check itself fails
+        log.warning("  Balance check failed (proceeding anyway): %s", exc)
+    return True  # always let the order attempt through — CLOB will reject if truly insufficient
 
 
 # ── Core bet placement ─────────────────────────────────────────────────────────
