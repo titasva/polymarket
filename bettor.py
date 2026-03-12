@@ -172,6 +172,9 @@ def _on_chain_approve(private_key: str) -> None:
         candidate = Web3(provider)
         try:
             block = candidate.eth.block_number
+            # Polygon is a PoA chain — required for EIP-1559 block parsing
+            from web3.middleware import ExtraDataToPOAMiddleware
+            candidate.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             w3 = candidate
             log.info("  Connected to Polygon via %s (block %d)", rpc, block)
             break
