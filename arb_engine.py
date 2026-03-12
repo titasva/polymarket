@@ -39,7 +39,13 @@ def _tokens(s: str) -> list[str]:
 _TOTALS_RE = re.compile(
     r"\bO/U\b"
     r"|\bover[-/\s]under\b"
-    r"|\btotal[s]?\s*(?:goals?|points?|runs?|yards?)?\s*\d",
+    r"|\btotal[s]?\s*(?:goals?|points?|runs?|yards?)?\s*\d"
+    r"|\bboth\s+teams?\s+to\s+score\b"
+    r"|\bBTTS\b"
+    r"|\bclean\s+sheet\b"
+    r"|\bfirst\s+(?:goal|scorer|team\s+to\s+score)\b"
+    r"|\banytime\s+(?:goal|scorer)\b"
+    r"|\bto\s+(?:score|win)\s+(?:a\s+)?(?:goal|point)s?\b",
     re.IGNORECASE,
 )
 
