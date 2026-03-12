@@ -97,6 +97,19 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_pm_vol       ON pm_markets(volume DESC);
     """)
     conn.commit()
+
+    # Migrations: add settlement columns if they don't exist yet
+    for col, typedef in [
+        ("outcome",    "TEXT"),          # WIN or LOSS
+        ("pnl_usdc",   "REAL"),          # net profit/loss in USDC
+        ("settled_at", "TEXT"),          # ISO timestamp of settlement
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE bets ADD COLUMN {col} {typedef}")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
     conn.close()
     print("Database initialised:", DB_PATH)
 

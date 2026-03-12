@@ -96,6 +96,10 @@ def get_stats():
     def _n(table, where=""):
         return c.execute(f"SELECT COUNT(*) n FROM {table} {where}").fetchone()["n"]
 
+    def _sum(col, where=""):
+        row = c.execute(f"SELECT COALESCE(SUM({col}),0) v FROM bets {where}").fetchone()
+        return row["v"]
+
     stats = {
         "pm_markets":      _n("pm_markets"),
         "odds_events":     _n("odds_events"),
@@ -103,6 +107,10 @@ def get_stats():
         "edges_found":     _n("edge_log", "WHERE best_edge > 0"),
         "bets_today":      _n("bets", "WHERE status='PLACED' AND date(placed_at)=date('now')"),
         "bets_total":      _n("bets", "WHERE status='PLACED'"),
+        "bets_won":        _n("bets", "WHERE status='PLACED' AND outcome='WIN'"),
+        "bets_lost":       _n("bets", "WHERE status='PLACED' AND outcome='LOSS'"),
+        "bets_pending":    _n("bets", "WHERE status='PLACED' AND outcome IS NULL"),
+        "net_pnl":         round(_sum("pnl_usdc", "WHERE status='PLACED'"), 2),
         "last_fetch":   None,
         "api_remaining": None,
     }
@@ -239,6 +247,17 @@ def unmatch(pm_id):
     c.commit()
     c.close()
     return jsonify({"status": "ok"})
+
+
+# ── Settlement trigger ─────────────────────────────────────────────────────────
+
+@app.route("/api/settle", methods=["POST"])
+def trigger_settle():
+    def _run():
+        from settler import settle_bets
+        settle_bets()
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "started"})
 
 
 # ── Manual fetch trigger ───────────────────────────────────────────────────────

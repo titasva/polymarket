@@ -94,6 +94,7 @@
     <div class="toolbar">
       <span class="toolbar-title">Auto-placed bets</span>
       <div class="toolbar-right">
+        <button id="btn-settle" class="btn-ghost btn-sm">⚖ Check settlement</button>
         <button id="btn-refresh-bets" class="btn-ghost btn-sm">↻ Refresh</button>
       </div>
     </div>
@@ -113,11 +114,13 @@
             <th class="n">Edge %</th>
             <th class="n">Amount</th>
             <th class="n">Status</th>
+            <th class="n">Result</th>
+            <th class="n">P&amp;L</th>
             <th>Order ID</th>
           </tr>
         </thead>
         <tbody id="bets-body">
-          <tr><td colspan="10" class="loading">Loading…</td></tr>
+          <tr><td colspan="12" class="loading">Loading…</td></tr>
         </tbody>
       </table>
     </div>

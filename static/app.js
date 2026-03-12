@@ -63,6 +63,18 @@ function betStatusBadge(status) {
   return `<span class="bet-status bet-failed">FAILED</span>`;
 }
 
+function outcomeBadge(outcome) {
+  if (!outcome) return `<span class="bet-status bet-pending">PENDING</span>`;
+  if (outcome === "WIN")  return `<span class="bet-status bet-win">WIN</span>`;
+  return `<span class="bet-status bet-loss">LOSS</span>`;
+}
+
+function pnlCell(pnl) {
+  if (pnl == null) return `<span class="dim">–</span>`;
+  const cls = pnl >= 0 ? "pnl-pos" : "pnl-neg";
+  return `<span class="${cls}">${pnl >= 0 ? "+" : ""}${usdc(pnl)}</span>`;
+}
+
 function confBadge(score) {
   if (score == null) return "–";
   const cls = score >= 0.8 ? "conf-high" : score >= 0.6 ? "conf-mid" : "conf-low";
@@ -199,43 +211,61 @@ document.getElementById("btn-fetch").addEventListener("click", async function ()
 
 async function loadBets() {
   const tbody = document.getElementById("bets-body");
-  tbody.innerHTML = `<tr><td colspan="10" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="12" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
 
   let rows;
   try {
     rows = await api("/api/bets?limit=200");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="10" class="empty">Error loading bets.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" class="empty">Error loading bets.</td></tr>`;
     return;
   }
 
   // Summary bar
-  const placed     = rows.filter(b => b.status === "PLACED");
-  const nowDate    = new Date().toDateString();
-  const todayBets  = placed.filter(b => {
+  const placed      = rows.filter(b => b.status === "PLACED");
+  const wins        = placed.filter(b => b.outcome === "WIN");
+  const losses      = placed.filter(b => b.outcome === "LOSS");
+  const pending     = placed.filter(b => !b.outcome);
+  const netPnl      = placed.reduce((s, b) => s + (b.pnl_usdc || 0), 0);
+  const totalStaked = placed.reduce((s, b) => s + (b.size_usdc || 0), 0);
+  const nowDate     = new Date().toDateString();
+  const todayBets   = placed.filter(b => {
     if (!b.placed_at) return false;
     const s = b.placed_at;
     return new Date(s.includes("Z") ? s : s + "Z").toDateString() === nowDate;
   });
-  const totalStaked = placed.reduce((s, b) => s + (b.size_usdc || 0), 0);
-  const todayStaked = todayBets.reduce((s, b) => s + (b.size_usdc || 0), 0);
+
+  const pnlClass = netPnl >= 0 ? "bsum-green" : "bsum-red";
+  const pnlSign  = netPnl >= 0 ? "+" : "";
 
   document.getElementById("bets-summary").innerHTML = `
     <div class="bsum-item">
       <span class="bsum-label">Total placed</span>
-      <span class="bsum-val bsum-green">${placed.length}</span>
+      <span class="bsum-val">${placed.length}</span>
     </div>
     <div class="bsum-item">
-      <span class="bsum-label">Today</span>
-      <span class="bsum-val bsum-yellow">${todayBets.length}</span>
+      <span class="bsum-label">Won</span>
+      <span class="bsum-val bsum-green">${wins.length}</span>
     </div>
     <div class="bsum-item">
-      <span class="bsum-label">Staked today</span>
-      <span class="bsum-val bsum-green">${usdc(todayStaked)}</span>
+      <span class="bsum-label">Lost</span>
+      <span class="bsum-val bsum-red">${losses.length}</span>
+    </div>
+    <div class="bsum-item">
+      <span class="bsum-label">Pending</span>
+      <span class="bsum-val bsum-yellow">${pending.length}</span>
+    </div>
+    <div class="bsum-item bsum-divider">
+      <span class="bsum-label">Net P&amp;L</span>
+      <span class="bsum-val ${pnlClass}">${pnlSign}${usdc(netPnl)}</span>
     </div>
     <div class="bsum-item">
       <span class="bsum-label">Total staked</span>
       <span class="bsum-val">${usdc(totalStaked)}</span>
+    </div>
+    <div class="bsum-item">
+      <span class="bsum-label">Today</span>
+      <span class="bsum-val bsum-yellow">${todayBets.length}</span>
     </div>
     <div class="bsum-item">
       <span class="bsum-label">Failed</span>
@@ -244,12 +274,12 @@ async function loadBets() {
   `;
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="10" class="empty">No bets placed yet. Enable auto-betting in Settings and run a fetch.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" class="empty">No bets placed yet. Enable auto-betting in Settings and run a fetch.</td></tr>`;
     return;
   }
 
   tbody.innerHTML = rows.map(b => `
-    <tr>
+    <tr class="${b.outcome === "WIN" ? "bet-row-win" : b.outcome === "LOSS" ? "bet-row-loss" : ""}">
       <td>${fmtDate(b.placed_at)}</td>
       <td><div class="ev-teams">${esc(b.event_name || "–")}</div></td>
       <td class="q-cell">${esc(b.question || "–")}</td>
@@ -259,12 +289,31 @@ async function loadBets() {
       <td class="n"><span class="edge-val ${edgeColorClass(b.edge_pct || 0)}">${(b.edge_pct || 0).toFixed(2)}%</span></td>
       <td class="n">${usdc(b.size_usdc)}</td>
       <td class="n">${betStatusBadge(b.status)}</td>
+      <td class="n">${outcomeBadge(b.outcome)}</td>
+      <td class="n">${pnlCell(b.pnl_usdc)}</td>
       <td><span class="order-id" title="${esc(b.order_id || "")}">${esc(b.order_id || "–")}</span></td>
     </tr>
   `).join("");
 }
 
 document.getElementById("btn-refresh-bets").addEventListener("click", loadBets);
+
+document.getElementById("btn-settle").addEventListener("click", async function () {
+  this.disabled = true;
+  this.innerHTML = `<span class="spinner"></span>Checking…`;
+  const btn = this;
+  try {
+    await api("/api/settle", { method: "POST" });
+    setTimeout(async () => {
+      await loadBets();
+      btn.disabled = false;
+      btn.textContent = "⚖ Check settlement";
+    }, 3000);
+  } catch (_) {
+    btn.disabled = false;
+    btn.textContent = "⚖ Check settlement";
+  }
+});
 
 /* ── Markets tab ─────────────────────────────────────────────────────────── */
 
