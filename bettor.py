@@ -140,7 +140,7 @@ def _send_tx(w3, contract_fn, addr: str, private_key: str, label: str) -> None:
     signed  = w3.eth.account.sign_transaction(tx, private_key)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
     log.info("  %s tx: 0x%s — waiting …", label, tx_hash.hex())
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120, poll_latency=3)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120, poll_latency=10)
     if receipt.status == 1:
         log.info("  %s confirmed (block %d)", label, receipt.blockNumber)
     else:
@@ -222,6 +222,10 @@ def _on_chain_approve(private_key: str) -> None:
             log.info("  Approving Cond.Tokens → %s …", label)
             _send_tx(w3, ct.functions.setApprovalForAll(sp, True), addr, private_key,
                      f"CT → {label}")
+
+    import time
+    log.info("  Approvals submitted — waiting 15s for CLOB to index on-chain state …")
+    time.sleep(15)
 
 
 def _ensure_allowance(client, private_key: str = "") -> None:
