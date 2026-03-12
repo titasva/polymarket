@@ -210,20 +210,41 @@ def fetch_active_sports(api_key: str) -> list[str]:
     return keys
 
 
+_PRODUCTIVE_SPORTS_TTL_HOURS = 24  # full rescan once a day
+
+
 def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     if not api_key:
         log.warning("No Odds API key — skipping odds fetch")
         return []
 
-    # Use user-configured list, or auto-discover active sports
+    # Priority: user-configured list > productive cache > full active scan
     sports_raw = get_setting("tracked_sports", "").strip()
     if sports_raw:
         sport_list = [s.strip() for s in sports_raw.split(",") if s.strip()]
         log.info("Using configured sports list (%d sports)", len(sport_list))
     else:
-        sport_list = fetch_active_sports(api_key)
+        productive_raw = get_setting("productive_sports", "")
+        productive_at  = get_setting("productive_sports_at", "")
+        use_cache = False
+        if productive_raw and productive_at:
+            try:
+                age_h = (datetime.now(timezone.utc) -
+                         datetime.fromisoformat(productive_at)).total_seconds() / 3600
+                use_cache = age_h < _PRODUCTIVE_SPORTS_TTL_HOURS
+            except Exception:
+                pass
+
+        if use_cache:
+            sport_list = json.loads(productive_raw)
+            log.info("Using productive sports cache (%d sports, %.1fh old)",
+                     len(sport_list), age_h)
+        else:
+            sport_list = fetch_active_sports(api_key)
+            log.info("Full sports scan (%d sports)", len(sport_list))
 
     out, remaining = [], None
+    productive = []
 
     for sport in sport_list:
         r, data = _get(
@@ -241,17 +262,25 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
         if r is not None:
             remaining = r.headers.get("x-requests-remaining", remaining)
 
+        parsed = []
         for ev in data:
-            out.extend(_parse_odds_event(ev, sport))
+            parsed.extend(_parse_odds_event(ev, sport))
+        if parsed:
+            productive.append(sport)
+            out.extend(parsed)
+            log.info("  → %s: %d events", sport, len(data))
 
-        log.info("  → %s: %d events", sport, len(data))
-        time.sleep(0.4)
+    # Persist which sports had events (used to skip empty sports next cycle)
+    if productive:
+        set_setting("productive_sports", json.dumps(productive))
+        set_setting("productive_sports_at", datetime.now(timezone.utc).isoformat())
 
     if remaining is not None:
         set_setting("odds_api_remaining", str(remaining))
         log.info("Odds API requests remaining: %s", remaining)
 
-    log.info("Total odds events: %d", len(out))
+    log.info("Total odds events: %d (from %d/%d sports)",
+             len(out), len(productive), len(sport_list))
     return out
 
 
