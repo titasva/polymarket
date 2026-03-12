@@ -370,10 +370,17 @@ def maybe_place_bet(
         # Place a limit order slightly above market price for better fill odds
         limit_price = round(min(pm_price + 0.02, 0.97), 4)
 
+        # size in OrderArgs = number of shares, not USDC.
+        # shares = desired_usdc / price_per_share, rounded to 2 decimal places.
+        size_shares = round(size_usdc / limit_price, 2)
+
+        log.info("  Order: %s shares @ $%.4f (≈$%.2f USDC)",
+                 size_shares, limit_price, size_shares * limit_price)
+
         order_args = OrderArgs(
             token_id=token_id,
             price=limit_price,
-            size=size_usdc,
+            size=size_shares,
             side=BUY,
         )
         resp = client.create_and_post_order(order_args)
