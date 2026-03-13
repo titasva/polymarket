@@ -245,6 +245,7 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
 
     out, remaining = [], None
     productive = []
+    sandbox_mkts: list[dict] = []
 
     for sport in sport_list:
         r, data = _get(
@@ -252,7 +253,7 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
             params={
                 "apiKey":     api_key,
                 "regions":    "us,eu",
-                "markets":    "h2h",
+                "markets":    "h2h,spreads,totals",
                 "bookmakers": bookmakers,
                 "oddsFormat": "decimal",
             },
@@ -265,6 +266,7 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
         parsed = []
         for ev in data:
             parsed.extend(_parse_odds_event(ev, sport))
+            sandbox_mkts.extend(_parse_sandbox_from_event(ev, sport))
         if parsed:
             productive.append(sport)
             out.extend(parsed)
@@ -281,6 +283,10 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     if remaining is not None:
         set_setting("odds_api_remaining", str(remaining))
         log.info("Odds API requests remaining: %s", remaining)
+
+    if sandbox_mkts:
+        _save_sandbox_odds(sandbox_mkts)
+        log.info("Sandbox odds markets stored: %d", len(sandbox_mkts))
 
     log.info("Total odds events: %d (from %d/%d sports)",
              len(out), len(productive), len(sport_list))
@@ -353,6 +359,244 @@ def _parse_odds_event(ev: dict, sport: str) -> list[dict]:
                 "overround":     overround,
             })
     return results
+
+
+# ── Sandbox market parsing ──────────────────────────────────────────────────────
+
+def _parse_sandbox_from_event(ev: dict, sport: str) -> list[dict]:
+    """
+    Extract spreads, totals, and draw odds from a raw Odds API event.
+    Returns a list of sandbox_odds_markets rows.
+    """
+    commence = ev.get("commence_time", "")
+    if commence:
+        try:
+            ct = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+            if ct <= datetime.now(timezone.utc):
+                return []
+        except ValueError:
+            pass
+
+    raw_id   = ev.get("id", "")
+    home     = ev.get("home_team", "")
+    away     = ev.get("away_team", "")
+    comp     = ev.get("sport_title", sport)
+    now      = datetime.utcnow().isoformat()
+    results  = []
+
+    for bk in ev.get("bookmakers", []):
+        bk_key  = bk.get("key", "")
+        bk_name = bk.get("title", bk_key)
+
+        for mkt in bk.get("markets", []):
+            mkt_key  = mkt.get("key", "")
+            outcomes = mkt.get("outcomes", [])
+
+            # ── Spreads ─────────────────────────────────────────────────────
+            if mkt_key == "spreads" and len(outcomes) >= 2:
+                for ou in outcomes:
+                    name  = ou.get("name", "")
+                    point = float(ou.get("point") or 0)
+                    price = float(ou.get("price") or 0)
+                    if not price:
+                        continue
+                    # Pair each side with its counterpart
+                    other = next(
+                        (x for x in outcomes if x.get("name") != name), None
+                    )
+                    if not other or not float(other.get("price") or 0):
+                        continue
+                    # Only store once per line (keyed by name_a < name_b)
+                    if name < other.get("name", ""):
+                        uid = f"{raw_id}_{bk_key}_spreads_{name}_{point}"
+                        results.append({
+                            "id":             uid,
+                            "raw_event_id":   raw_id,
+                            "sport":          sport,
+                            "competition":    comp,
+                            "home_team":      home,
+                            "away_team":      away,
+                            "commence_time":  commence,
+                            "bookmaker":      bk_name,
+                            "bookmaker_key":  bk_key,
+                            "market_type":    "spreads",
+                            "point":          point,
+                            "outcome_a_name": name,
+                            "outcome_b_name": other.get("name"),
+                            "outcome_a_dec":  price,
+                            "outcome_b_dec":  float(other.get("price") or 0),
+                            "last_updated":   now,
+                        })
+
+            # ── Totals (O/U) ────────────────────────────────────────────────
+            elif mkt_key == "totals" and len(outcomes) >= 2:
+                over  = next((o for o in outcomes if o.get("name", "").lower() == "over"),  None)
+                under = next((o for o in outcomes if o.get("name", "").lower() == "under"), None)
+                if over and under:
+                    o_dec = float(over.get("price")  or 0)
+                    u_dec = float(under.get("price") or 0)
+                    point = float(over.get("point")  or under.get("point") or 0)
+                    if o_dec and u_dec:
+                        uid = f"{raw_id}_{bk_key}_totals_{point}"
+                        results.append({
+                            "id":             uid,
+                            "raw_event_id":   raw_id,
+                            "sport":          sport,
+                            "competition":    comp,
+                            "home_team":      home,
+                            "away_team":      away,
+                            "commence_time":  commence,
+                            "bookmaker":      bk_name,
+                            "bookmaker_key":  bk_key,
+                            "market_type":    "totals",
+                            "point":          point,
+                            "outcome_a_name": "Over",
+                            "outcome_b_name": "Under",
+                            "outcome_a_dec":  o_dec,
+                            "outcome_b_dec":  u_dec,
+                            "last_updated":   now,
+                        })
+
+            # ── Draw (from 3-way h2h) ────────────────────────────────────────
+            elif mkt_key == "h2h":
+                draw_out = next(
+                    (o for o in outcomes if o.get("name", "").lower() in ("draw", "tie")),
+                    None,
+                )
+                if draw_out:
+                    d_dec = float(draw_out.get("price") or 0)
+                    # Proxy "No Draw": combine home+away implied / total
+                    h_out = next((o for o in outcomes if o.get("name") == home), None)
+                    a_out = next((o for o in outcomes if o.get("name") == away), None)
+                    if h_out and a_out and d_dec:
+                        # "No Draw" decimal ≈ 1 / (home_impl + away_impl)
+                        h_dec = float(h_out.get("price") or 0)
+                        a_dec = float(a_out.get("price") or 0)
+                        if h_dec and a_dec:
+                            no_draw_impl = (1/h_dec) + (1/a_dec)
+                            nd_dec = round(1.0 / no_draw_impl, 4) if no_draw_impl else 0
+                            uid = f"{raw_id}_{bk_key}_h2h_draw"
+                            results.append({
+                                "id":             uid,
+                                "raw_event_id":   raw_id,
+                                "sport":          sport,
+                                "competition":    comp,
+                                "home_team":      home,
+                                "away_team":      away,
+                                "commence_time":  commence,
+                                "bookmaker":      bk_name,
+                                "bookmaker_key":  bk_key,
+                                "market_type":    "h2h_draw",
+                                "point":          None,
+                                "outcome_a_name": "Draw",
+                                "outcome_b_name": "No Draw",
+                                "outcome_a_dec":  d_dec,
+                                "outcome_b_dec":  nd_dec,
+                                "last_updated":   now,
+                            })
+
+    return results
+
+
+# ── Sandbox DB write ────────────────────────────────────────────────────────────
+
+def _save_sandbox_odds(markets: list[dict]) -> None:
+    c = _conn()
+    for m in markets:
+        c.execute(
+            """INSERT OR REPLACE INTO sandbox_odds_markets
+               (id, raw_event_id, sport, competition, home_team, away_team,
+                commence_time, bookmaker, bookmaker_key, market_type, point,
+                outcome_a_name, outcome_b_name, outcome_a_dec, outcome_b_dec,
+                last_updated)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (m["id"], m["raw_event_id"], m["sport"], m["competition"],
+             m["home_team"], m["away_team"], m["commence_time"],
+             m["bookmaker"], m["bookmaker_key"], m["market_type"], m.get("point"),
+             m["outcome_a_name"], m["outcome_b_name"],
+             m["outcome_a_dec"], m["outcome_b_dec"], m["last_updated"]),
+        )
+    c.commit()
+    c.close()
+
+
+# ── Sandbox matching ────────────────────────────────────────────────────────────
+
+def run_sandbox_matching(markets: list[dict]) -> None:
+    """
+    For each PM market, detect its type and try to match it to a sandbox
+    odds market (spread/totals/draw/btts). Results go to sandbox_matches.
+    """
+    from sandbox_engine import (
+        detect_market_type, find_sandbox_event,
+        find_sandbox_market, calc_sandbox_edge,
+    )
+
+    c = _conn()
+    # Load sandbox odds and base events
+    sandbox_rows = c.execute(
+        "SELECT * FROM sandbox_odds_markets"
+    ).fetchall()
+    sandbox_mkts = [dict(r) for r in sandbox_rows]
+
+    # Deduplicated base event list (one row per raw event id)
+    seen = set()
+    base_events = []
+    for r in sandbox_rows:
+        rid = r["raw_event_id"]
+        if rid not in seen:
+            seen.add(rid)
+            base_events.append({
+                "raw_event_id": rid,
+                "home_team":    r["home_team"],
+                "away_team":    r["away_team"],
+                "sport":        r["sport"],
+            })
+    c.close()
+
+    if not base_events:
+        log.info("Sandbox matching: no sandbox odds in DB yet")
+        return
+
+    saved = 0
+    now = datetime.utcnow().isoformat()
+
+    c = _conn()
+    for pm in markets:
+        pm_type = detect_market_type(pm["question"])
+        if pm_type in ("h2h", "unknown"):
+            continue   # h2h is handled by the main pipeline
+
+        ev, score = find_sandbox_event(pm["question"], base_events)
+        if ev is None:
+            continue
+
+        odds_mkt = find_sandbox_market(
+            pm_type, pm["question"], sandbox_mkts, ev["raw_event_id"]
+        )
+        if odds_mkt is None:
+            continue
+
+        edge = calc_sandbox_edge(
+            pm["yes_price"], pm["no_price"],
+            pm_type, pm["question"], odds_mkt,
+        )
+
+        c.execute(
+            """INSERT OR REPLACE INTO sandbox_matches
+               (pm_id, odds_market_id, pm_type, match_score,
+                yes_maps_to, yes_edge, no_edge, best_edge, best_side, detected_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (pm["id"], odds_mkt["id"], pm_type, round(score, 4),
+             edge.get("yes_maps_to"),
+             edge["yes_edge"], edge["no_edge"],
+             edge["best_edge"], edge.get("best_side"), now),
+        )
+        saved += 1
+
+    c.commit()
+    c.close()
+    log.info("Sandbox matching: %d PM markets matched to non-h2h odds", saved)
 
 
 # ── DB writes ──────────────────────────────────────────────────────────────────
@@ -493,6 +737,9 @@ def fetch_all() -> None:
                 edge_pct=edge["best_edge"] * 100,
                 token_id=token_id,
             )
+
+    # 4. Sandbox matching (spread / totals / draw / btts)
+    run_sandbox_matching(markets)
 
     set_setting("last_fetch", datetime.utcnow().isoformat())
     log.info("Matched %d/%d  |  %d with positive edge", matched, len(markets), edges)

@@ -99,6 +99,7 @@ function switchTab(tab) {
   if (tab === "edges")    loadEdges();
   if (tab === "bets")     loadBets();
   if (tab === "markets")  loadMarkets();
+  if (tab === "sandbox")  loadSandbox();
   if (tab === "settings") loadConfig();
 }
 
@@ -453,6 +454,128 @@ document.getElementById("btn-save").addEventListener("click", async () => {
   }
   msg.classList.remove("hidden");
   setTimeout(() => msg.classList.add("hidden"), 4000);
+});
+
+/* ── Sandbox tab ─────────────────────────────────────────────────────────── */
+
+const MARKET_TYPE_LABELS = {
+  h2h:          "H2H",
+  spread:       "Spread",
+  totals:       "Totals O/U",
+  totals_sets:  "Sets O/U",
+  totals_games: "Games O/U",
+  draw:         "Draw",
+  btts:         "BTTS",
+  unknown:      "?",
+};
+
+const MARKET_TYPE_COLORS = {
+  spread:       "sb-type-spread",
+  totals:       "sb-type-totals",
+  totals_sets:  "sb-type-totals",
+  totals_games: "sb-type-totals",
+  draw:         "sb-type-draw",
+  btts:         "sb-type-btts",
+  h2h:          "sb-type-h2h",
+};
+
+function mktTypeBadge(t) {
+  const label = MARKET_TYPE_LABELS[t] || t;
+  const cls   = MARKET_TYPE_COLORS[t]  || "";
+  return `<span class="mkt-type-badge ${cls}">${esc(label)}</span>`;
+}
+
+async function loadSandbox() {
+  const tbody   = document.getElementById("sandbox-body");
+  const pmType  = document.getElementById("sb-type").value;
+  const minEdge = parseFloat(document.getElementById("sb-edge").value) || 0;
+
+  tbody.innerHTML = `<tr><td colspan="13" class="loading"><span class="spinner"></span>Loading…</td></tr>`;
+
+  const params = new URLSearchParams({ limit: 300, min_edge: minEdge });
+  if (pmType) params.set("pm_type", pmType);
+
+  let rows;
+  try {
+    rows = await api("/api/sandbox?" + params);
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="13" class="empty">Error loading sandbox data.</td></tr>`;
+    return;
+  }
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="13" class="empty">No sandbox matches found. Run a fetch first — the sandbox populates alongside the regular fetch cycle.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => {
+    const pmUrl  = r.slug ? `https://polymarket.com/event/${esc(r.slug)}` : null;
+    const qCell  = pmUrl
+      ? `<a class="q-link" href="${pmUrl}" target="_blank">${esc(r.question)}</a>`
+      : esc(r.question);
+
+    const pmYes  = r.yes_price != null ? (r.yes_price * 100).toFixed(1) + "%" : "–";
+    const pmNo   = r.no_price  != null ? (r.no_price  * 100).toFixed(1) + "%" : "–";
+    const aImpl  = r.outcome_a_implied != null ? (r.outcome_a_implied * 100).toFixed(1) + "%" : "–";
+    const bImpl  = r.outcome_b_implied != null ? (r.outcome_b_implied * 100).toFixed(1) + "%" : "–";
+
+    const aDec   = r.outcome_a_dec != null ? r.outcome_a_dec.toFixed(2) : "–";
+    const bDec   = r.outcome_b_dec != null ? r.outcome_b_dec.toFixed(2) : "–";
+
+    const aCell  = `<div class="sb-outcome">${esc(r.outcome_a_name || "–")}</div><div class="sb-dec">${aDec}</div>`;
+    const bCell  = `<div class="sb-outcome">${esc(r.outcome_b_name || "–")}</div><div class="sb-dec">${bDec}</div>`;
+
+    const eventName = r.home_team && r.away_team
+      ? `${esc(r.home_team)} vs ${esc(r.away_team)}` : "–";
+
+    const line = r.point != null ? r.point : "–";
+    const epct = r.best_edge_pct || 0;
+    const hasEdge = epct >= 2;
+
+    // Map YES→ which outcome it is
+    const mapsTo = r.yes_maps_to
+      ? `<div class="sb-maps-to">YES→${esc(r.yes_maps_to)}</div>` : "";
+
+    return `<tr class="${hasEdge ? "has-edge" : ""}">
+      <td>${mktTypeBadge(r.pm_type)}</td>
+      <td class="q-cell">${qCell}${mapsTo}</td>
+      <td class="n">${pmYes}</td>
+      <td class="n">${pmNo}</td>
+      <td>
+        <div class="ev-teams">${eventName}</div>
+        <div class="ev-meta">${esc(r.bookmaker || "")}${r.sport ? " · " + esc(r.sport) : ""}</div>
+      </td>
+      <td>${aCell}</td>
+      <td>${bCell}</td>
+      <td class="n">${aImpl}</td>
+      <td class="n">${bImpl}</td>
+      <td class="n">${line}</td>
+      <td class="n"><span class="edge-val ${edgeColorClass(epct)}">${epct.toFixed(2)}%</span></td>
+      <td class="n">${sideBadge(r.best_side)}</td>
+      <td class="n">${confBadge(r.match_score)}</td>
+    </tr>`;
+  }).join("");
+}
+
+document.getElementById("sb-apply").addEventListener("click", loadSandbox);
+document.getElementById("sb-type")?.addEventListener("change", loadSandbox);
+
+document.getElementById("sb-fetch").addEventListener("click", async function () {
+  this.disabled = true;
+  this.innerHTML = `<span class="spinner"></span>Fetching…`;
+  const btn = this;
+  try {
+    await api("/api/fetch", { method: "POST" });
+    setTimeout(async () => {
+      await refreshStats();
+      await loadSandbox();
+      btn.disabled = false;
+      btn.textContent = "↻ Run sandbox fetch";
+    }, 6000);
+  } catch (_) {
+    btn.disabled = false;
+    btn.textContent = "↻ Run sandbox fetch";
+  }
 });
 
 /* ── Auto-refresh & init ─────────────────────────────────────────────────── */

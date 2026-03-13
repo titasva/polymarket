@@ -151,3 +151,15 @@ header{background:var(--surface);border-bottom:1px solid var(--border);height:va
 
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .65s linear infinite;vertical-align:middle;margin-right:5px}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Sandbox tab ── */
+.mkt-type-badge{display:inline-block;font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.04em;white-space:nowrap}
+.sb-type-spread{background:rgba(96,165,250,.15);color:#60a5fa;border:1px solid rgba(96,165,250,.3)}
+.sb-type-totals{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.25)}
+.sb-type-draw{background:rgba(167,139,250,.15);color:#a78bfa;border:1px solid rgba(167,139,250,.3)}
+.sb-type-btts{background:rgba(74,222,128,.12);color:#4ade80;border:1px solid rgba(74,222,128,.25)}
+.sb-type-h2h{background:rgba(148,163,184,.1);color:#94a3b8;border:1px solid rgba(148,163,184,.2)}
+.sb-outcome{font-size:.8rem;font-weight:600;color:var(--text)}
+.sb-dec{font-family:var(--mono);font-size:.72rem;color:var(--dim)}
+.sb-maps-to{font-size:.68rem;color:var(--dim);margin-top:2px}
+.banner-info{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.3);color:var(--blue)}

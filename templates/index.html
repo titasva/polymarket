@@ -34,6 +34,7 @@
         <button class="nav-tab active" data-tab="edges">Opportunities</button>
         <button class="nav-tab" data-tab="bets">Bets</button>
         <button class="nav-tab" data-tab="markets">Markets</button>
+        <button class="nav-tab" data-tab="sandbox">Sandbox</button>
         <button class="nav-tab" data-tab="settings">Settings</button>
       </nav>
     </div>
@@ -157,6 +158,62 @@
         </thead>
         <tbody id="markets-body">
           <tr><td colspan="8" class="loading">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Sandbox ───────────────────────────────────────────────────────── -->
+  <section id="tab-sandbox" class="tab-pane">
+    <div class="toolbar">
+      <label class="filter-field">
+        <span class="fl">Market type</span>
+        <select id="sb-type">
+          <option value="">All types</option>
+          <option value="spread">Spread</option>
+          <option value="totals">Totals O/U</option>
+          <option value="totals_sets">Sets O/U</option>
+          <option value="totals_games">Games O/U</option>
+          <option value="draw">Draw</option>
+          <option value="btts">BTTS</option>
+        </select>
+      </label>
+      <label class="filter-field">
+        <span class="fl">Min edge %</span>
+        <input type="number" id="sb-edge" value="0" min="0" max="50" step="0.5" />
+      </label>
+      <div class="toolbar-right">
+        <button id="sb-apply" class="btn-primary btn-sm">Apply</button>
+        <button id="sb-fetch" class="btn-ghost btn-sm">↻ Run sandbox fetch</button>
+      </div>
+    </div>
+
+    <div id="sb-info-banner" class="banner banner-info">
+      <strong>Sandbox mode</strong> — matches PM questions to bookmaker spread, totals, draw and BTTS odds.
+      No bets are placed here. Run a fetch first to populate data.
+    </div>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Polymarket question</th>
+            <th class="n">PM YES%</th>
+            <th class="n">PM NO%</th>
+            <th>Sportsbook event</th>
+            <th>Outcome A</th>
+            <th>Outcome B</th>
+            <th class="n">Book A%</th>
+            <th class="n">Book B%</th>
+            <th class="n">Line</th>
+            <th class="n">Edge%</th>
+            <th class="n">Side</th>
+            <th class="n">Conf</th>
+          </tr>
+        </thead>
+        <tbody id="sandbox-body">
+          <tr><td colspan="13" class="loading">Loading…</td></tr>
         </tbody>
       </table>
     </div>

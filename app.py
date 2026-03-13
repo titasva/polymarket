@@ -263,6 +263,62 @@ def trigger_settle():
     return jsonify({"status": "started"})
 
 
+# ── Sandbox ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/sandbox")
+def get_sandbox():
+    limit    = min(int(request.args.get("limit", 300)), 500)
+    pm_type  = request.args.get("pm_type", "").strip()
+    min_edge = float(request.args.get("min_edge", 0)) / 100.0
+
+    conditions = ["sm.best_edge >= ?"]
+    params     = [min_edge]
+    if pm_type:
+        conditions.append("sm.pm_type = ?")
+        params.append(pm_type)
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    c = _conn()
+    rows = c.execute(f"""
+        SELECT
+            sm.*,
+            pm.question, pm.yes_price, pm.no_price, pm.volume,
+            pm.end_date, pm.slug, pm.category,
+            sob.sport, sob.competition,
+            sob.home_team, sob.away_team, sob.commence_time,
+            sob.bookmaker, sob.market_type AS odds_market_type,
+            sob.point, sob.outcome_a_name, sob.outcome_b_name,
+            sob.outcome_a_dec, sob.outcome_b_dec
+        FROM sandbox_matches sm
+        JOIN pm_markets pm           ON sm.pm_id         = pm.id
+        JOIN sandbox_odds_markets sob ON sm.odds_market_id = sob.id
+        INNER JOIN (
+            SELECT pm_id, MIN(odds_market_id) AS first_id
+            FROM sandbox_matches
+            GROUP BY pm_id
+        ) latest ON sm.pm_id = latest.pm_id AND sm.odds_market_id = latest.first_id
+        {where}
+        ORDER BY sm.best_edge DESC, pm.volume DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
+    c.close()
+
+    result = []
+    for r in rows:
+        row = _d(r)
+        # Implied probabilities from decimals
+        for side, dec_key in (("a", "outcome_a_dec"), ("b", "outcome_b_dec")):
+            dec = row.get(dec_key) or 0
+            row[f"outcome_{side}_implied"] = round(1.0 / dec, 4) if dec else 0
+        # Edge to percent
+        for f in ("yes_edge", "no_edge", "best_edge"):
+            if row.get(f) is not None:
+                row[f + "_pct"] = round((row[f] or 0) * 100, 2)
+        result.append(row)
+    return jsonify(result)
+
+
 # ── Manual fetch trigger ───────────────────────────────────────────────────────
 
 @app.route("/api/fetch", methods=["POST"])

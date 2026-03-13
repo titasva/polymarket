@@ -95,6 +95,46 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_edge_val     ON edge_log(max_edge DESC);
         CREATE INDEX IF NOT EXISTS idx_bets_placed  ON bets(placed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_pm_vol       ON pm_markets(volume DESC);
+
+        -- ── Sandbox: multi-type sportsbook odds ──────────────────────────────
+        -- Stores spreads, totals, draw, and BTTS odds per event per bookmaker.
+        CREATE TABLE IF NOT EXISTS sandbox_odds_markets (
+            id              TEXT PRIMARY KEY,
+            raw_event_id    TEXT,
+            sport           TEXT,
+            competition     TEXT,
+            home_team       TEXT,
+            away_team       TEXT,
+            commence_time   TEXT,
+            bookmaker       TEXT,
+            bookmaker_key   TEXT,
+            market_type     TEXT,   -- 'spreads' | 'totals' | 'h2h_draw' | 'btts'
+            point           REAL,   -- spread/total line (NULL for draw/btts)
+            outcome_a_name  TEXT,   -- e.g. "Over" / home team name / "Draw"
+            outcome_b_name  TEXT,   -- e.g. "Under" / away team name / "No Draw"
+            outcome_a_dec   REAL,
+            outcome_b_dec   REAL,
+            last_updated    TEXT
+        );
+
+        -- ── Sandbox: PM question ↔ odds market matches ───────────────────────
+        CREATE TABLE IF NOT EXISTS sandbox_matches (
+            pm_id           TEXT,
+            odds_market_id  TEXT,
+            pm_type         TEXT,   -- detected type: spread / totals / draw / btts
+            match_score     REAL,
+            yes_maps_to     TEXT,   -- 'over'|'under'|'home_cover'|'away_cover'|'yes'
+            yes_edge        REAL,
+            no_edge         REAL,
+            best_edge       REAL,
+            best_side       TEXT,
+            detected_at     TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (pm_id, odds_market_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sb_odds_event  ON sandbox_odds_markets(raw_event_id);
+        CREATE INDEX IF NOT EXISTS idx_sb_match_pm    ON sandbox_matches(pm_id);
+        CREATE INDEX IF NOT EXISTS idx_sb_match_edge  ON sandbox_matches(best_edge DESC);
     """)
     conn.commit()
 
