@@ -560,6 +560,12 @@ async function loadSandbox() {
 document.getElementById("sb-apply").addEventListener("click", loadSandbox);
 document.getElementById("sb-type")?.addEventListener("change", loadSandbox);
 
+document.getElementById("sb-clear").addEventListener("click", async function () {
+  if (!confirm("Clear all sandbox matches and odds data?")) return;
+  await api("/api/sandbox/clear", { method: "POST" });
+  loadSandbox();
+});
+
 document.getElementById("sb-fetch").addEventListener("click", async function () {
   this.disabled = true;
   this.innerHTML = `<span class="spinner"></span>Fetching…`;

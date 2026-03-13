@@ -319,6 +319,16 @@ def get_sandbox():
     return jsonify(result)
 
 
+@app.route("/api/sandbox/clear", methods=["POST"])
+def clear_sandbox():
+    c = _conn()
+    c.execute("DELETE FROM sandbox_matches")
+    c.execute("DELETE FROM sandbox_odds_markets")
+    c.commit()
+    c.close()
+    return jsonify({"status": "ok"})
+
+
 # ── Manual fetch trigger ───────────────────────────────────────────────────────
 
 @app.route("/api/fetch", methods=["POST"])

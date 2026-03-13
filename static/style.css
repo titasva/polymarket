@@ -163,3 +163,4 @@ header{background:var(--surface);border-bottom:1px solid var(--border);height:va
 .sb-dec{font-family:var(--mono);font-size:.72rem;color:var(--dim)}
 .sb-maps-to{font-size:.68rem;color:var(--dim);margin-top:2px}
 .banner-info{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.3);color:var(--blue)}
+.btn-danger-ghost{color:var(--dim);border-color:var(--border)}.btn-danger-ghost:hover{color:var(--red);border-color:var(--red);background:rgba(248,113,113,.06)}
