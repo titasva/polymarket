@@ -103,6 +103,7 @@ def init_db():
         ("outcome",    "TEXT"),          # WIN or LOSS
         ("pnl_usdc",   "REAL"),          # net profit/loss in USDC
         ("settled_at", "TEXT"),          # ISO timestamp of settlement
+        ("redeemed_tx","TEXT"),          # Polygon tx hash of CTF redemption
     ]:
         try:
             conn.execute(f"ALTER TABLE bets ADD COLUMN {col} {typedef}")

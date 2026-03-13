@@ -63,9 +63,15 @@ function betStatusBadge(status) {
   return `<span class="bet-status bet-failed">FAILED</span>`;
 }
 
-function outcomeBadge(outcome) {
+function outcomeBadge(outcome, redeemedTx) {
   if (!outcome) return `<span class="bet-status bet-pending">PENDING</span>`;
-  if (outcome === "WIN")  return `<span class="bet-status bet-win">WIN</span>`;
+  if (outcome === "WIN") {
+    if (redeemedTx) {
+      const url = `https://polygonscan.com/tx/${esc(redeemedTx)}`;
+      return `<a class="bet-status bet-win bet-redeemed" href="${url}" target="_blank" title="Redeemed — view on Polygonscan">WIN ✓</a>`;
+    }
+    return `<span class="bet-status bet-win" title="Win — redemption pending">WIN ⟳</span>`;
+  }
   return `<span class="bet-status bet-loss">LOSS</span>`;
 }
 
@@ -289,7 +295,7 @@ async function loadBets() {
       <td class="n"><span class="edge-val ${edgeColorClass(b.edge_pct || 0)}">${(b.edge_pct || 0).toFixed(2)}%</span></td>
       <td class="n">${usdc(b.size_usdc)}</td>
       <td class="n">${betStatusBadge(b.status)}</td>
-      <td class="n">${outcomeBadge(b.outcome)}</td>
+      <td class="n">${outcomeBadge(b.outcome, b.redeemed_tx)}</td>
       <td class="n">${pnlCell(b.pnl_usdc)}</td>
       <td><span class="order-id" title="${esc(b.order_id || "")}">${esc(b.order_id || "–")}</span></td>
     </tr>

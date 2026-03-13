@@ -3,6 +3,7 @@ app.py — Flask server for the Polymarket Edge Finder + Auto-Bettor.
 Run:  python app.py
 """
 
+import logging
 import sqlite3
 import threading
 from datetime import datetime
@@ -13,6 +14,7 @@ from config import DB_PATH
 from init_db import init_db
 
 app = Flask(__name__)
+log = logging.getLogger(__name__)
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
@@ -255,7 +257,8 @@ def unmatch(pm_id):
 def trigger_settle():
     def _run():
         from settler import settle_bets
-        settle_bets()
+        result = settle_bets()
+        log.info("Settlement result: %s", result)
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"status": "started"})
 

@@ -84,6 +84,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);height:va
 .bet-placed{background:rgba(74,222,128,.15);color:var(--green);border:1px solid rgba(74,222,128,.3)}
 .bet-failed{background:rgba(248,113,113,.1);color:var(--red);border:1px solid rgba(248,113,113,.25)}
 .bet-win{background:rgba(74,222,128,.2);color:var(--green);border:1px solid rgba(74,222,128,.4)}
+.bet-redeemed{text-decoration:none;cursor:pointer}.bet-redeemed:hover{background:rgba(74,222,128,.35);color:var(--green)}
 .bet-loss{background:rgba(248,113,113,.15);color:var(--red);border:1px solid rgba(248,113,113,.35)}
 .bet-pending{background:rgba(251,191,36,.1);color:var(--yellow);border:1px solid rgba(251,191,36,.25)}
 .bet-none{color:var(--dim);font-size:.72rem}
