@@ -49,9 +49,19 @@ _TOTALS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Period-specific markets (halves, quarters, periods) — not full-game winners
+_PERIOD_RE = re.compile(
+    r"\b[12][hH]\b"                          # 1H, 2H
+    r"|\b(?:1st|2nd|3rd|4th)\s+(?:half|quarter|period|qtr)\b"
+    r"|\bhalf(?:time)?\s+(?:result|winner|moneyline)\b"
+    r"|\b(?:first|second)\s+half\b"
+    r"|\bQ[1-4]\b",                          # Q1, Q2, Q3, Q4
+    re.IGNORECASE,
+)
+
 
 def _is_h2h_winner_question(question: str) -> bool:
-    return not _TOTALS_RE.search(question)
+    return not _TOTALS_RE.search(question) and not _PERIOD_RE.search(question)
 
 
 # ── H2H team extraction ────────────────────────────────────────────────────────
