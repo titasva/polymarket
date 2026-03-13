@@ -126,15 +126,21 @@ def _extract_teams_any(question: str):
 
 # ── Event + market matching ───────────────────────────────────────────────────
 
+_MIN_TEAM_SIM = 0.55   # both teams must individually exceed this (mirrors main pipeline)
+
+
 def find_sandbox_event(
     question: str,
     base_events: list[dict],
-    threshold: float = 0.35,
+    threshold: float = 0.45,
 ) -> tuple[dict | None, float]:
     """
     Match a PM question (any type) to a sportsbook base event using team names.
     `base_events` is a deduplicated list: [{raw_event_id, home_team, away_team, sport}].
     Returns (best_event, score).
+
+    Both teams must individually exceed _MIN_TEAM_SIM so that one strong
+    partial match cannot drag up the score for a completely wrong opponent.
     """
     teams = _extract_teams_any(question)
     if not teams:
@@ -144,9 +150,21 @@ def find_sandbox_event(
     for ev in base_events:
         home = ev.get("home_team", "")
         away = ev.get("away_team", "")
-        fwd = (_team_sim(t1, home) + _team_sim(t2, away)) / 2
-        rev = (_team_sim(t2, home) + _team_sim(t1, away)) / 2
-        sc = max(fwd, rev)
+
+        fwd_h = _team_sim(t1, home)
+        fwd_a = _team_sim(t2, away)
+        rev_h = _team_sim(t2, home)
+        rev_a = _team_sim(t1, away)
+
+        # Both teams must individually match — one strong match can't carry the other
+        fwd_ok = fwd_h >= _MIN_TEAM_SIM and fwd_a >= _MIN_TEAM_SIM
+        rev_ok = rev_h >= _MIN_TEAM_SIM and rev_a >= _MIN_TEAM_SIM
+        if not fwd_ok and not rev_ok:
+            continue
+
+        fwd = (fwd_h + fwd_a) / 2 if fwd_ok else 0.0
+        rev = (rev_h + rev_a) / 2 if rev_ok else 0.0
+        sc  = max(fwd, rev)
         if sc > best_sc:
             best_sc = sc
             best_ev = ev
