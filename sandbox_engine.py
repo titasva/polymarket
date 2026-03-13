@@ -4,13 +4,13 @@ sandbox_engine.py
 Multi-market-type detection and matching for the Sandbox tab.
 
 Detects these PM question types and matches them to bookmaker odds:
-  h2h          — full-game winner (moneyline)
   spread        — point spread / handicap cover
   totals        — over/under total score
   totals_sets   — tennis: total sets O/U
   totals_games  — tennis: total games O/U
   draw          — will the match end in a draw (soccer)
   btts          — both teams to score (soccer)
+  h2h           — full-game winner (handled by main pipeline, skipped here)
 
 No auto-betting. Analysis only.
 """
@@ -23,41 +23,60 @@ from arb_engine import _team_sim, extract_h2h_teams
 # ── Market-type detection ──────────────────────────────────────────────────────
 
 _BTTS_RE = re.compile(
-    r"\bboth\s+teams?\s+(?:to\s+)?score\b|\bBTTS\b",
+    r"\bboth\s+teams?\s+(?:to\s+)?score\b"
+    r"|\bBTTS\b"
+    r"|\bboth\s+sides?\s+(?:to\s+)?score\b"
+    r"|\beach\s+team\s+(?:to\s+)?score\b",
     re.IGNORECASE,
 )
 
 _DRAW_RE = re.compile(
-    r"\bdraw\b|\bend\s+in\s+(?:a\s+)?(?:draw|tie)\b",
+    r"\bend\s+in\s+(?:a\s+)?(?:draw|tie)\b"
+    r"|\bfinish\s+(?:in\s+a\s+)?(?:draw|tie)\b"
+    r"|\bdraw\s+(?:yes|no|\?)\b"
+    r"|\bwill\s+(?:it\s+be\s+a\s+)?draw\b"
+    r"|\bdraw\s+result\b"
+    r"|\btie\s+(?:yes|no|\?)\b",
     re.IGNORECASE,
 )
 
 _SPREAD_RE = re.compile(
-    r"\bcover\b|\bspread\b|\bhandicap\b"
-    r"|\b[+-]\d+(?:\.\d+)?\s*(?:points?|goals?|runs?)?\b"
-    r"|\bby\s+(?:more\s+than|at\s+least|over)\s+\d",
+    r"\bcover[s]?\b"
+    r"|\bspread\b"
+    r"|\bhandicap\b"
+    r"|\b[+-]\d+(?:\.\d+)?\s*(?:points?|goals?|runs?|games?)?\b"   # explicit ±N line
+    r"|\bby\s+(?:more\s+than|at\s+least|over)\s+\d"                # by more than N
+    r"|\bby\s+\d+\+?\b"                                             # by 2+ or by 3
+    r"|\bwin[s]?\s+by\b"                                            # wins by
+    r"|\bmargin\b",                                                  # margin of victory
     re.IGNORECASE,
 )
 
 _OU_RE = re.compile(
-    r"\b(?:over|under)\b|\bO/U\b|\btotal[s]?\b"
-    r"|\bmore\s+than\s+\d|\bless\s+than\s+\d",
+    r"\b(?:over|under)\b"
+    r"|\bO/U\b"
+    r"|\btotal[s]?\b"
+    r"|\bmore\s+than\s+\d"
+    r"|\bless\s+than\s+\d"
+    r"|\bat\s+least\s+\d+\s*(?:goals?|points?|runs?|sets?|games?)\b"
+    r"|\b\d+\+\s*(?:goals?|points?|runs?|corners?|sets?|games?)\b"  # "2+ goals"
+    r"|\bhow\s+many\b",
     re.IGNORECASE,
 )
 
 _SETS_RE  = re.compile(r"\bsets?\b",  re.IGNORECASE)
 _GAMES_RE = re.compile(r"\bgames?\b", re.IGNORECASE)
 
-# Extract numeric lines
+# Numeric line extraction
 _SIGNED_RE = re.compile(r"([+-]\d+(?:\.\d+)?)")
-_NUMBER_RE = re.compile(r"\b(\d{1,3}(?:\.\d)?)\b")
+_NUMBER_RE  = re.compile(r"\b(\d{1,3}(?:\.\d)?)\b")
 
 
 def detect_market_type(question: str) -> str:
     """
-    Classify a Polymarket question into one of the supported market types.
+    Classify a PM question into one of the supported sandbox market types.
     Returns: 'btts' | 'draw' | 'spread' | 'totals' | 'totals_sets' |
-             'totals_games' | 'h2h' | 'unknown'
+             'totals_games' | 'h2h'
     """
     if _BTTS_RE.search(question):
         return "btts"
@@ -71,8 +90,7 @@ def detect_market_type(question: str) -> str:
         if _GAMES_RE.search(question):
             return "totals_games"
         return "totals"
-    # Default: treat as h2h (extract_h2h_teams may still return None for some)
-    return "h2h"
+    return "h2h"   # default — handled by main pipeline
 
 
 def extract_line(question: str) -> float | None:
@@ -87,38 +105,100 @@ def extract_line(question: str) -> float | None:
     return None
 
 
-def extract_ou_direction(question: str) -> str | None:
-    """Returns 'over' or 'under' for a totals question, or None if ambiguous."""
+def extract_ou_direction(question: str) -> str:
+    """
+    Returns 'over' or 'under' for a totals question.
+    Defaults to 'over' when ambiguous — most PM totals questions frame YES as the
+    exciting outcome (over) or are phrased "will total exceed X?".
+    """
     q = question.lower()
-    if re.search(r"\bover\b|\bmore\s+than\b", q):
-        return "over"
     if re.search(r"\bunder\b|\bless\s+than\b", q):
         return "under"
-    return None
+    # 'over', 'more than', 'at least', 'N+ goals', or ambiguous → default over
+    return "over"
 
 
-# ── Team extraction (loose, for non-h2h questions) ────────────────────────────
+# ── Team extraction ────────────────────────────────────────────────────────────
 
-_LOOSE_PATS = [
-    r"(.+?)\s+vs?\.?\s+(.+?)(?:\s*[-–:|?]|\s*$)",
-    r"(.+?)\s+or\s+(.+?)(?:\?|$)",
-]
-_STRIP_PREFIX = re.compile(
-    r"^(?:will|can|the|both|total|over|under|does|do|is)\s+",
+# Patterns that indicate the END of a team name in longer question strings
+_TRAILING_RE = re.compile(
+    r"\s+(?:"
+    r"end[s]?\s+in"
+    r"|finish(?:es)?\s+(?:in|as)"
+    r"|win[s]?\s+(?:the|their|a)"
+    r"|beat[s]?\s"
+    r"|score[s]?\b(?!\s+\d)"     # "score" but not "score N goals"
+    r"|keep[s]?\s+a"
+    r"|draw[s]?\s+(?:with|in|no)"
+    r"|advance[s]?"
+    r"|qualify|qualified"
+    r"|to\s+(?:win|score|beat|advance|qualify)"
+    r"|by\s+\d"                   # "by 2 goals" → stop before "by"
+    r")\b.*$",
+    re.IGNORECASE,
+)
+
+# Question-word prefixes to strip from the start of an extracted team name
+_LEAD_RE = re.compile(
+    r"^(?:will|can|the|both|total|over|under|does|do|is|are|was|were|would|should|could|who|what|when|which|a|an)\s+",
     re.IGNORECASE,
 )
 
 
+def _clean_team(raw: str) -> str:
+    """
+    Scrub leading question words and trailing clause fragments from a raw team
+    string produced by the regex extractor.
+
+    Examples:
+      "Will Arsenal"            → "Arsenal"
+      "Chelsea end in a draw"   → "Chelsea"
+      "both teams score in Ajax" → "Ajax"  (after multi-pass leading strip)
+    """
+    s = raw.strip()
+    # Strip leading question words — iterate until stable
+    for _ in range(5):
+        s2 = _LEAD_RE.sub("", s)
+        if s2 == s:
+            break
+        s = s2
+    # Strip trailing clauses
+    s = _TRAILING_RE.sub("", s).strip().rstrip("?.!,").strip()
+    return s
+
+
+_LOOSE_PATS = [
+    # Standard "A vs B" — stop at common separator
+    r"(.+?)\s+vs?\.?\s+(.+?)(?:\s*[-–:|?]|\s*$)",
+    # "A or B"
+    r"(.+?)\s+or\s+(.+?)(?:\?|$)",
+]
+
+
 def _extract_teams_any(question: str):
-    """Extract team pair from any question style."""
+    """
+    Extract a (team1, team2) pair from any style of PM question.
+
+    Strategy:
+    1. Try the strict h2h extractor from arb_engine (best for clean "A vs B" questions)
+    2. Fall back to loose patterns with full team-name cleanup applied to both sides
+    """
+    # Try the standard extractor first
     teams = extract_h2h_teams(question)
     if teams:
-        return teams
+        t1, t2 = teams
+        # arb_engine may leave trailing clause words in t2 — clean them
+        t2c = _clean_team(t2)
+        if t2c and len(t2c) > 2:
+            return t1, t2c
+        # If cleanup wiped out t2, fall through to loose patterns
+
+    # Loose patterns with full cleanup on both sides
     for pat in _LOOSE_PATS:
         m = re.search(pat, question, re.IGNORECASE)
         if m:
-            t1 = _STRIP_PREFIX.sub("", m.group(1).strip())
-            t2 = m.group(2).strip().rstrip("?").strip()
+            t1 = _clean_team(m.group(1).strip())
+            t2 = _clean_team(m.group(2).strip().rstrip("?!.").strip())
             if t1 and t2 and len(t1) > 2 and len(t2) > 2:
                 return t1, t2
     return None
@@ -178,7 +258,10 @@ def find_sandbox_market(
     raw_event_id: str,
 ) -> dict | None:
     """
-    Given a pm market type and matched event, find the best sandbox odds market.
+    Given a pm market type and matched event id, find the best sandbox odds market.
+
+    For lines (spreads / totals), selects the bookmaker line closest to the
+    numeric value mentioned in the PM question (e.g. O/U 2.5 → find 2.5 line).
     """
     candidates = [m for m in sandbox_markets if m.get("raw_event_id") == raw_event_id]
 
@@ -188,21 +271,22 @@ def find_sandbox_market(
         "totals_games": "totals",
         "spread":       "spreads",
         "draw":         "h2h_draw",
-        "btts":         "btts",
+        # btts: not a standard Odds API market — no match available
     }
     api_type = api_type_map.get(pm_type)
     if api_type is None:
-        return None   # h2h and unknown don't use sandbox markets
+        return None
 
     matches = [m for m in candidates if m.get("market_type") == api_type]
     if not matches:
         return None
 
-    # For lines (spreads/totals), prefer the line closest to the one in the question
+    # Pick line closest to what the PM question states
     pm_line = extract_line(question)
-    if pm_line and api_type in ("spreads", "totals"):
+    if pm_line is not None and api_type in ("spreads", "totals"):
         return min(matches, key=lambda m: abs((m.get("point") or 0) - pm_line))
 
+    # For draw/btts: prefer the market from the most "liquid" bookmaker (first found)
     return matches[0]
 
 
@@ -217,7 +301,6 @@ MARKET_LABELS = {
     "totals_games": "Games O/U",
     "draw":         "Draw",
     "btts":         "BTTS",
-    "unknown":      "Unknown",
 }
 
 
@@ -229,14 +312,14 @@ def calc_sandbox_edge(
     odds_market: dict,
 ) -> dict:
     """
-    Compare PM YES/NO prices against a sandbox odds market (spread, totals, draw, btts).
+    Compare PM YES/NO prices against a sandbox bookmaker market.
 
-    odds_market keys expected:
-        market_type, point,
-        outcome_a_name, outcome_a_dec,
-        outcome_b_name, outcome_b_dec
-
-    Returns a dict with edge metrics.
+    Mapping rules:
+      totals/sets/games : YES → Over  (unless question says "under")
+      spread            : YES → home cover (if negative spread in question)
+                                away cover  (if positive / unsigned)
+      draw              : YES → Draw
+      btts              : YES → Both score (outcome_a)
     """
     a_dec = odds_market.get("outcome_a_dec") or 0.0
     b_dec = odds_market.get("outcome_b_dec") or 0.0
@@ -262,11 +345,9 @@ def calc_sandbox_edge(
     ai = result["book_a_implied"]
     bi = result["book_b_implied"]
 
-    # ── Map PM YES to outcome_a or outcome_b ──
     if pm_type in ("totals", "totals_sets", "totals_games"):
-        # Odds API convention: outcome_a = Over, outcome_b = Under
-        direction = extract_ou_direction(question)
-        if direction == "under":
+        # Odds API: outcome_a = Over, outcome_b = Under
+        if extract_ou_direction(question) == "under":
             yes_impl, no_impl = bi, ai
             result["yes_maps_to"] = "under"
         else:
@@ -274,18 +355,18 @@ def calc_sandbox_edge(
             result["yes_maps_to"] = "over"
 
     elif pm_type == "spread":
-        # outcome_a = home cover (negative spread/favourite)
-        # outcome_b = away cover (positive spread/underdog)
+        # outcome_a = home cover (favourite, negative spread)
+        # outcome_b = away cover (underdog, positive spread)
         m = _SIGNED_RE.search(question)
         if m and float(m.group(1)) < 0:
-            yes_impl, no_impl = ai, bi   # favourite cover
+            yes_impl, no_impl = ai, bi
             result["yes_maps_to"] = "home_cover"
         else:
-            yes_impl, no_impl = bi, ai   # underdog / away cover
+            yes_impl, no_impl = bi, ai
             result["yes_maps_to"] = "away_cover"
 
     else:
-        # draw / btts: outcome_a = YES (draw happens / both score)
+        # draw / btts: outcome_a = affirmative (draw / both score)
         yes_impl, no_impl = ai, bi
         result["yes_maps_to"] = "yes"
 

@@ -293,13 +293,17 @@ def get_sandbox():
         FROM sandbox_matches sm
         JOIN pm_markets pm           ON sm.pm_id         = pm.id
         JOIN sandbox_odds_markets sob ON sm.odds_market_id = sob.id
+        -- Best row per (pm_id, pm_type): highest edge, then match confidence
         INNER JOIN (
-            SELECT pm_id, MIN(odds_market_id) AS first_id
+            SELECT pm_id, pm_type,
+                   MAX(best_edge + match_score * 0.001) AS rank_key
             FROM sandbox_matches
-            GROUP BY pm_id
-        ) latest ON sm.pm_id = latest.pm_id AND sm.odds_market_id = latest.first_id
+            GROUP BY pm_id, pm_type
+        ) best ON sm.pm_id = best.pm_id
+               AND sm.pm_type = best.pm_type
+               AND (sm.best_edge + sm.match_score * 0.001) = best.rank_key
         {where}
-        ORDER BY sm.best_edge DESC, pm.volume DESC
+        ORDER BY sm.best_edge DESC, sm.match_score DESC, pm.volume DESC
         LIMIT ?
     """, params + [limit]).fetchall()
     c.close()
