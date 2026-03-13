@@ -210,7 +210,7 @@ def fetch_active_sports(api_key: str) -> list[str]:
     return keys
 
 
-_PRODUCTIVE_SPORTS_TTL_HOURS = 24  # full rescan once a day
+_PRODUCTIVE_SPORTS_TTL_HOURS = 8   # full rescan 3x per day
 
 
 def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
