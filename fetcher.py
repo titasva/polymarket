@@ -63,9 +63,6 @@ def _get(url, params=None):
         r = requests.get(url, params=params, headers=HEADERS, timeout=15)
         r.raise_for_status()
         return r, r.json()
-    except requests.exceptions.HTTPError as exc:
-        log.warning("GET %s  →  %s", url, exc)
-        return exc.response, None
     except requests.exceptions.RequestException as exc:
         log.warning("GET %s  →  %s", url, exc)
         return None, None
@@ -250,24 +247,17 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     productive = []
     sandbox_mkts: list[dict] = []
 
-    _FULL_MARKETS     = "h2h,spreads,totals,alternate_spreads,alternate_totals,btts"
-    _BASELINE_MARKETS = "h2h,spreads,totals"
-
     for sport in sport_list:
-        params = {
-            "apiKey":     api_key,
-            "regions":    "us,eu",
-            "markets":    _FULL_MARKETS,
-            "bookmakers": bookmakers,
-            "oddsFormat": "decimal",
-        }
-        r, data = _get(f"{ODDS_API_BASE}/sports/{sport}/odds", params)
-        # 422 = sport doesn't support one of the extended market types;
-        # fall back to baseline markets so we still get h2h/spreads/totals
-        if data is None and r is not None and r.status_code == 422:
-            log.info("  %s: extended markets unsupported — retrying with baseline", sport)
-            params = {**params, "markets": _BASELINE_MARKETS}
-            r, data = _get(f"{ODDS_API_BASE}/sports/{sport}/odds", params)
+        r, data = _get(
+            f"{ODDS_API_BASE}/sports/{sport}/odds",
+            params={
+                "apiKey":     api_key,
+                "regions":    "us,eu",
+                "markets":    "h2h,spreads,totals",
+                "bookmakers": bookmakers,
+                "oddsFormat": "decimal",
+            },
+        )
         if data is None:
             continue
         if r is not None:
@@ -402,8 +392,8 @@ def _parse_sandbox_from_event(ev: dict, sport: str) -> list[dict]:
             mkt_key  = mkt.get("key", "")
             outcomes = mkt.get("outcomes", [])
 
-            # ── Spreads (regular + alternate) ───────────────────────────────
-            if mkt_key in ("spreads", "alternate_spreads") and len(outcomes) >= 2:
+            # ── Spreads ─────────────────────────────────────────────────────
+            if mkt_key == "spreads" and len(outcomes) >= 2:
                 for ou in outcomes:
                     name  = ou.get("name", "")
                     point = float(ou.get("point") or 0)
@@ -418,7 +408,7 @@ def _parse_sandbox_from_event(ev: dict, sport: str) -> list[dict]:
                         continue
                     # Only store once per line (keyed by name_a < name_b)
                     if name < other.get("name", ""):
-                        uid = f"{raw_id}_{bk_key}_{mkt_key}_{name}_{point}"
+                        uid = f"{raw_id}_{bk_key}_spreads_{name}_{point}"
                         results.append({
                             "id":             uid,
                             "raw_event_id":   raw_id,
@@ -464,68 +454,6 @@ def _parse_sandbox_from_event(ev: dict, sport: str) -> list[dict]:
                             "outcome_b_name": "Under",
                             "outcome_a_dec":  o_dec,
                             "outcome_b_dec":  u_dec,
-                            "last_updated":   now,
-                        })
-
-            # ── Alternate Totals (many O/U lines at different points) ─────────
-            elif mkt_key == "alternate_totals":
-                # Group by point value — each point is its own row
-                pt_map: dict[float, dict] = {}
-                for ou in outcomes:
-                    pt    = float(ou.get("point") or 0)
-                    name  = ou.get("name", "").lower()
-                    price = float(ou.get("price") or 0)
-                    if price:
-                        pt_map.setdefault(pt, {})[name] = price
-                for pt, sides in pt_map.items():
-                    o_dec = sides.get("over")
-                    u_dec = sides.get("under")
-                    if o_dec and u_dec:
-                        uid = f"{raw_id}_{bk_key}_alt_totals_{pt}"
-                        results.append({
-                            "id":             uid,
-                            "raw_event_id":   raw_id,
-                            "sport":          sport,
-                            "competition":    comp,
-                            "home_team":      home,
-                            "away_team":      away,
-                            "commence_time":  commence,
-                            "bookmaker":      bk_name,
-                            "bookmaker_key":  bk_key,
-                            "market_type":    "totals",   # same type as regular totals
-                            "point":          pt,
-                            "outcome_a_name": "Over",
-                            "outcome_b_name": "Under",
-                            "outcome_a_dec":  o_dec,
-                            "outcome_b_dec":  u_dec,
-                            "last_updated":   now,
-                        })
-
-            # ── BTTS (Both Teams To Score) ───────────────────────────────────
-            elif mkt_key == "btts" and len(outcomes) >= 2:
-                yes_out = next((o for o in outcomes if o.get("name", "").lower() == "yes"), None)
-                no_out  = next((o for o in outcomes if o.get("name", "").lower() == "no"),  None)
-                if yes_out and no_out:
-                    y_dec = float(yes_out.get("price") or 0)
-                    n_dec = float(no_out.get("price")  or 0)
-                    if y_dec and n_dec:
-                        uid = f"{raw_id}_{bk_key}_btts"
-                        results.append({
-                            "id":             uid,
-                            "raw_event_id":   raw_id,
-                            "sport":          sport,
-                            "competition":    comp,
-                            "home_team":      home,
-                            "away_team":      away,
-                            "commence_time":  commence,
-                            "bookmaker":      bk_name,
-                            "bookmaker_key":  bk_key,
-                            "market_type":    "btts",
-                            "point":          None,
-                            "outcome_a_name": "Yes",
-                            "outcome_b_name": "No",
-                            "outcome_a_dec":  y_dec,
-                            "outcome_b_dec":  n_dec,
                             "last_updated":   now,
                         })
 
