@@ -63,6 +63,9 @@ def _get(url, params=None):
         r = requests.get(url, params=params, headers=HEADERS, timeout=15)
         r.raise_for_status()
         return r, r.json()
+    except requests.exceptions.HTTPError as exc:
+        log.warning("GET %s  →  %s", url, exc)
+        return exc.response, None
     except requests.exceptions.RequestException as exc:
         log.warning("GET %s  →  %s", url, exc)
         return None, None
@@ -247,17 +250,24 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
     productive = []
     sandbox_mkts: list[dict] = []
 
+    _FULL_MARKETS     = "h2h,spreads,totals,alternate_spreads,alternate_totals,btts"
+    _BASELINE_MARKETS = "h2h,spreads,totals"
+
     for sport in sport_list:
-        r, data = _get(
-            f"{ODDS_API_BASE}/sports/{sport}/odds",
-            params={
-                "apiKey":     api_key,
-                "regions":    "us,eu",
-                "markets":    "h2h,spreads,totals,alternate_spreads,alternate_totals,btts",
-                "bookmakers": bookmakers,
-                "oddsFormat": "decimal",
-            },
-        )
+        params = {
+            "apiKey":     api_key,
+            "regions":    "us,eu",
+            "markets":    _FULL_MARKETS,
+            "bookmakers": bookmakers,
+            "oddsFormat": "decimal",
+        }
+        r, data = _get(f"{ODDS_API_BASE}/sports/{sport}/odds", params)
+        # 422 = sport doesn't support one of the extended market types;
+        # fall back to baseline markets so we still get h2h/spreads/totals
+        if data is None and r is not None and r.status_code == 422:
+            log.info("  %s: extended markets unsupported — retrying with baseline", sport)
+            params = {**params, "markets": _BASELINE_MARKETS}
+            r, data = _get(f"{ODDS_API_BASE}/sports/{sport}/odds", params)
         if data is None:
             continue
         if r is not None:
