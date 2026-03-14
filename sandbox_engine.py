@@ -271,7 +271,7 @@ def find_sandbox_market(
         "totals_games": "totals",
         "spread":       "spreads",
         "draw":         "h2h_draw",
-        # btts: not a standard Odds API market — no match available
+        "btts":         "btts",
     }
     api_type = api_type_map.get(pm_type)
     if api_type is None:
@@ -284,9 +284,16 @@ def find_sandbox_market(
     # Pick line closest to what the PM question states
     pm_line = extract_line(question)
     if pm_line is not None and api_type in ("spreads", "totals"):
-        return min(matches, key=lambda m: abs((m.get("point") or 0) - pm_line))
+        best = min(matches, key=lambda m: abs((m.get("point") or 0) - pm_line))
+        # Reject match if closest available line is too far from PM line.
+        # Tolerance: 10% of the PM line value, minimum 0.5.
+        # Prevents e.g. soccer O/U 4.5 matching against a 2.25 standard line.
+        tolerance = max(0.5, pm_line * 0.10)
+        if abs((best.get("point") or 0) - pm_line) > tolerance:
+            return None
+        return best
 
-    # For draw/btts: prefer the market from the most "liquid" bookmaker (first found)
+    # For draw/btts: no line to match — pick first available
     return matches[0]
 
 
