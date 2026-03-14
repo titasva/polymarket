@@ -12,6 +12,7 @@ Requires:
 
 import logging
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 from config import DB_PATH
@@ -383,7 +384,32 @@ def maybe_place_bet(
             size=size_shares,
             side=BUY,
         )
-        resp = client.create_and_post_order(order_args)
+
+        # Retry up to 3 times on transient network errors (status_code=None)
+        resp = None
+        last_exc = None
+        for attempt in range(3):
+            try:
+                resp = client.create_and_post_order(order_args)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                # status_code=None means a network-level failure — safe to retry
+                if "status_code=None" in err_str or "Request exception" in err_str:
+                    if attempt < 2:
+                        wait = 2 ** attempt  # 1s, 2s
+                        log.warning("  Order attempt %d failed (network error) — retrying in %ds: %s",
+                                    attempt + 1, wait, exc)
+                        time.sleep(wait)
+                        continue
+                # Any other error: don't retry
+                break
+
+        if last_exc is not None:
+            raise last_exc
+
         order_id = (resp or {}).get("orderID", "")
         if order_id:
             log.info("  Order placed: %s", order_id)
