@@ -63,6 +63,9 @@ def _get(url, params=None):
         r = requests.get(url, params=params, headers=HEADERS, timeout=15)
         r.raise_for_status()
         return r, r.json()
+    except requests.exceptions.HTTPError as exc:
+        log.warning("GET %s  →  %s", url, exc)
+        return exc.response, None   # return response so callers can inspect status
     except requests.exceptions.RequestException as exc:
         log.warning("GET %s  →  %s", url, exc)
         return None, None
@@ -224,13 +227,10 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
         sport_list = fetch_active_sports(api_key)
         log.info("Full sports scan (%d sports)", len(sport_list))
 
-    out, remaining = [], None
-    productive = []
-    # Extended markets availability by sport category:
-    #   soccer_*         → btts + alternate lines fully supported
-    #   major US sports  → alternate lines only (no btts)
-    #   everything else  → baseline only (some leagues 422 on alternates too)
-    def _markets_for(sport: str) -> str:
+    _BASELINE = "h2h,spreads,totals"
+
+    def _extended_markets(sport: str) -> str:
+        """Best-effort extended market string for a sport category."""
         if sport.startswith("soccer_"):
             return "h2h,spreads,totals,alternate_spreads,alternate_totals,btts"
         if any(sport.startswith(p) for p in (
@@ -238,21 +238,57 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
             "icehockey_nhl", "baseball_mlb",
         )):
             return "h2h,spreads,totals,alternate_spreads,alternate_totals"
-        return "h2h,spreads,totals"
+        return _BASELINE
 
+    # Per-sport market-support cache: maps sport key → "baseline" | "extended"
+    # Lets us skip the double-request for sports that 422'd in a previous cycle.
+    # Cached for 24 h so any API changes are picked up daily.
+    _SPORT_MKT_TTL = 24
+    try:
+        sport_mkt_cache: dict = json.loads(get_setting("sport_mkt_cache", "{}") or "{}")
+        sport_mkt_cache_at = datetime.fromisoformat(
+            get_setting("sport_mkt_cache_at", datetime.now(timezone.utc).isoformat())
+        )
+        if (datetime.now(timezone.utc) - sport_mkt_cache_at).total_seconds() / 3600 > _SPORT_MKT_TTL:
+            sport_mkt_cache = {}
+    except Exception:
+        sport_mkt_cache = {}
+
+    out, remaining = [], None
+    productive = []
     sandbox_mkts: list[dict] = []
 
     for sport in sport_list:
+        extended = _extended_markets(sport)
+        needs_baseline = sport_mkt_cache.get(sport) == "baseline"
+        markets = _BASELINE if (needs_baseline or extended == _BASELINE) else extended
+
         r, data = _get(
             f"{ODDS_API_BASE}/sports/{sport}/odds",
             params={
                 "apiKey":     api_key,
                 "regions":    "us,eu",
-                "markets":    _markets_for(sport),
+                "markets":    markets,
                 "bookmakers": bookmakers,
                 "oddsFormat": "decimal",
             },
         )
+
+        # 422 means these extended markets aren't supported → fall back & remember
+        if data is None and r is not None and getattr(r, "status_code", 0) == 422:
+            log.info("%s: extended markets unsupported — retrying with baseline", sport)
+            sport_mkt_cache[sport] = "baseline"
+            r, data = _get(
+                f"{ODDS_API_BASE}/sports/{sport}/odds",
+                params={
+                    "apiKey":     api_key,
+                    "regions":    "us,eu",
+                    "markets":    _BASELINE,
+                    "bookmakers": bookmakers,
+                    "oddsFormat": "decimal",
+                },
+            )
+
         if data is None:
             continue
         if r is not None:
@@ -266,6 +302,10 @@ def fetch_odds_events(api_key: str, bookmakers: str = "pinnacle") -> list[dict]:
             productive.append(sport)
             out.extend(parsed)
             log.info("  → %s: %d events", sport, len(data))
+
+    # Persist per-sport market support cache
+    set_setting("sport_mkt_cache", json.dumps(sport_mkt_cache))
+    set_setting("sport_mkt_cache_at", datetime.now(timezone.utc).isoformat())
 
     if remaining is not None:
         set_setting("odds_api_remaining", str(remaining))
