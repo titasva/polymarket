@@ -69,7 +69,7 @@ _GAMES_RE = re.compile(r"\bgames?\b", re.IGNORECASE)
 
 # Numeric line extraction
 _SIGNED_RE = re.compile(r"([+-]\d+(?:\.\d+)?)")
-_NUMBER_RE  = re.compile(r"\b(\d{1,3}(?:\.\d)?)\b")
+_NUMBER_RE  = re.compile(r"\b(\d{1,3}(?:\.\d+)?)\b")
 
 
 def detect_market_type(question: str) -> str:
