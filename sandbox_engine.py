@@ -281,22 +281,14 @@ def find_sandbox_market(
     if not matches:
         return None
 
-    # Pick line closest to what the PM question states
+    # For lines, require an exact match (within 0.5 pts) — any deviation
+    # means a different question and produces a meaningless edge calculation.
     pm_line = extract_line(question)
     if pm_line is not None and api_type in ("spreads", "totals"):
-        # Prefer exact match first (within 0.5), then fall back to closest
         exact = [m for m in matches if abs((m.get("point") or 0) - pm_line) <= 0.5]
-        if exact:
-            return min(exact, key=lambda m: abs((m.get("point") or 0) - pm_line))
-
-        # No exact match — accept closest within a tight absolute tolerance.
-        # Lines >20 (basketball/football totals at 180-260) allow ±2 pts.
-        # Lines ≤20 (soccer goals, tennis sets/games) allow ±0.5.
-        tolerance = 2.0 if pm_line > 20 else 0.5
-        best = min(matches, key=lambda m: abs((m.get("point") or 0) - pm_line))
-        if abs((best.get("point") or 0) - pm_line) > tolerance:
+        if not exact:
             return None
-        return best
+        return min(exact, key=lambda m: abs((m.get("point") or 0) - pm_line))
 
     # For draw/btts: no line to match — pick first available
     return matches[0]
