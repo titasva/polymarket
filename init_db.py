@@ -4,6 +4,7 @@ from config import DB_PATH
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,

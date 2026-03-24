@@ -26,8 +26,9 @@ POLYGON_CHAIN_ID = 137
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def _conn():
-    c = sqlite3.connect(DB_PATH, timeout=10)
+    c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
     return c
 
 
@@ -433,6 +434,9 @@ def maybe_place_bet(
             )
         else:
             log.error("Bet failed for %s: %s", pm_id, exc)
-        _record_bet(pm_id, question, event_name, bookmaker,
-                    side, pm_price, book_implied, edge_pct,
-                    size_usdc, token_id, "", "FAILED", err_str)
+        try:
+            _record_bet(pm_id, question, event_name, bookmaker,
+                        side, pm_price, book_implied, edge_pct,
+                        size_usdc, token_id, "", "FAILED", err_str)
+        except Exception as db_exc:
+            log.error("Could not record failed bet for %s: %s", pm_id, db_exc)
