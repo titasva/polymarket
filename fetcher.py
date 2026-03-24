@@ -58,17 +58,25 @@ def set_setting(key: str, value: str) -> None:
 
 # ── HTTP helper ────────────────────────────────────────────────────────────────
 
-def _get(url, params=None):
-    try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        return r, r.json()
-    except requests.exceptions.HTTPError as exc:
-        log.warning("GET %s  →  %s", url, exc)
-        return exc.response, None   # return response so callers can inspect status
-    except requests.exceptions.RequestException as exc:
-        log.warning("GET %s  →  %s", url, exc)
-        return None, None
+def _get(url, params=None, _retries=4):
+    delay = 2
+    for attempt in range(_retries):
+        try:
+            r = requests.get(url, params=params, headers=HEADERS, timeout=15)
+            r.raise_for_status()
+            return r, r.json()
+        except requests.exceptions.HTTPError as exc:
+            log.warning("GET %s  →  %s", url, exc)
+            return exc.response, None   # HTTP error — don't retry
+        except requests.exceptions.RequestException as exc:
+            if attempt < _retries - 1:
+                log.warning("GET %s  →  %s (retry %d/%d in %ds)",
+                            url, exc, attempt + 1, _retries - 1, delay)
+                time.sleep(delay)
+                delay *= 2
+            else:
+                log.warning("GET %s  →  %s (all %d retries exhausted)", url, exc, _retries - 1)
+    return None, None
 
 
 # ── Polymarket ─────────────────────────────────────────────────────────────────
