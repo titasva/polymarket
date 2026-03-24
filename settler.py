@@ -50,8 +50,9 @@ _CTF_ABI = [
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def _get_setting(key: str, default: str = "") -> str:
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     conn.close()
     return row["value"] if row else default
@@ -172,8 +173,9 @@ def settle_bets() -> dict:
     2. Redeem any WIN bets that haven't been redeemed yet (including prior wins).
     Returns {"settled": N, "redeemed": M}.
     """
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
 
     # ── Phase 1: settle unresolved bets ───────────────────────────────────────
 

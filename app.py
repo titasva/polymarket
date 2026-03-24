@@ -20,8 +20,9 @@ log = logging.getLogger(__name__)
 # ── DB ─────────────────────────────────────────────────────────────────────────
 
 def _conn():
-    c = sqlite3.connect(DB_PATH, timeout=10)
+    c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
     return c
 
 

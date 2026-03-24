@@ -37,8 +37,9 @@ HEADERS = {"User-Agent": "polymarket-edge-tracker/1.0"}
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def _conn():
-    c = sqlite3.connect(DB_PATH, timeout=10)
+    c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
     return c
 
 
