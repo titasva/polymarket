@@ -294,6 +294,59 @@ def find_sandbox_market(
     return matches[0]
 
 
+def find_sandbox_market_relaxed(
+    pm_type: str,
+    question: str,
+    sandbox_markets: list[dict],
+    raw_event_id: str,
+) -> tuple[dict | None, float | None]:
+    """
+    Like find_sandbox_market but for the betting path only.
+    Returns (closest_market, pm_line) for totals without enforcing a line
+    distance limit — the caller is responsible for checking line favorability.
+    Returns (None, None) if no totals market exists for the event.
+    """
+    api_type_map = {
+        "totals":       "totals",
+        "totals_sets":  "totals",
+        "totals_games": "totals",
+    }
+    api_type = api_type_map.get(pm_type)
+    if api_type is None:
+        return None, None
+
+    pm_line = extract_line(question)
+    if pm_line is None:
+        return None, None
+
+    candidates = [m for m in sandbox_markets
+                  if m.get("raw_event_id") == raw_event_id
+                  and m.get("market_type") == api_type]
+    if not candidates:
+        return None, None
+
+    best = min(candidates, key=lambda m: abs((m.get("point") or 0) - pm_line))
+    return best, pm_line
+
+
+def is_favorable_totals_line(pm_line: float, book_line: float, bet_direction: str) -> bool:
+    """
+    Returns True if the line relationship is valid for a bet:
+      - Exact match (within 0.5): always OK
+      - PM line > book line AND bet is UNDER: OK — extra cushion on the under
+      - PM line < book line AND bet is OVER:  OK — extra cushion on the over
+    Any other mismatch is unfavorable (we'd be getting a worse number than the
+    book, so the book's implied prob underestimates our true probability of winning).
+    """
+    if abs(pm_line - book_line) <= 0.5:
+        return True
+    if pm_line > book_line and bet_direction == "under":
+        return True
+    if pm_line < book_line and bet_direction == "over":
+        return True
+    return False
+
+
 # ── Edge calculation ──────────────────────────────────────────────────────────
 
 # Human-readable labels for each market type

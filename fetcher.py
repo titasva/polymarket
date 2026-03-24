@@ -649,8 +649,10 @@ def run_sandbox_matching(markets: list[dict]) -> None:
     """
     from sandbox_engine import (
         detect_market_type, find_sandbox_event,
-        find_sandbox_market, calc_sandbox_edge,
+        find_sandbox_market, find_sandbox_market_relaxed,
+        is_favorable_totals_line, calc_sandbox_edge,
     )
+    from bettor import maybe_place_bet
 
     c = _conn()
     # Load sandbox odds and base events
@@ -691,28 +693,68 @@ def run_sandbox_matching(markets: list[dict]) -> None:
         if ev is None:
             continue
 
+        # ── Analysis match (strict: exact line only) → sandbox display ──────
         odds_mkt = find_sandbox_market(
             pm_type, pm["question"], sandbox_mkts, ev["raw_event_id"]
         )
-        if odds_mkt is None:
-            continue
+        if odds_mkt is not None:
+            edge = calc_sandbox_edge(
+                pm["yes_price"], pm["no_price"],
+                pm_type, pm["question"], odds_mkt,
+            )
+            c.execute(
+                """INSERT OR REPLACE INTO sandbox_matches
+                   (pm_id, odds_market_id, pm_type, match_score,
+                    yes_maps_to, yes_edge, no_edge, best_edge, best_side, detected_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (pm["id"], odds_mkt["id"], pm_type, round(score, 4),
+                 edge.get("yes_maps_to"),
+                 edge["yes_edge"], edge["no_edge"],
+                 edge["best_edge"], edge.get("best_side"), now),
+            )
+            saved += 1
 
-        edge = calc_sandbox_edge(
-            pm["yes_price"], pm["no_price"],
-            pm_type, pm["question"], odds_mkt,
-        )
+        # ── Betting path (totals only): also allows favorable line mismatches ─
+        # Rule: exact match always OK; also OK if:
+        #   PM line > book line and bet direction is UNDER (extra cushion)
+        #   PM line < book line and bet direction is OVER  (extra cushion)
+        if pm_type in ("totals", "totals_sets", "totals_games"):
+            bet_mkt, pm_line = find_sandbox_market_relaxed(
+                pm_type, pm["question"], sandbox_mkts, ev["raw_event_id"]
+            )
+            if bet_mkt is not None and pm_line is not None:
+                bet_edge = calc_sandbox_edge(
+                    pm["yes_price"], pm["no_price"],
+                    pm_type, pm["question"], bet_mkt,
+                )
+                if bet_edge["best_side"] and bet_edge["best_edge"] > 0:
+                    # Resolve actual over/under direction we'd be betting
+                    if bet_edge["best_side"] == "YES":
+                        bet_dir = bet_edge["yes_maps_to"]  # "over" or "under"
+                    else:
+                        bet_dir = "under" if bet_edge["yes_maps_to"] == "over" else "over"
 
-        c.execute(
-            """INSERT OR REPLACE INTO sandbox_matches
-               (pm_id, odds_market_id, pm_type, match_score,
-                yes_maps_to, yes_edge, no_edge, best_edge, best_side, detected_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (pm["id"], odds_mkt["id"], pm_type, round(score, 4),
-             edge.get("yes_maps_to"),
-             edge["yes_edge"], edge["no_edge"],
-             edge["best_edge"], edge.get("best_side"), now),
-        )
-        saved += 1
+                    book_line = bet_mkt.get("point") or 0.0
+                    if is_favorable_totals_line(pm_line, book_line, bet_dir):
+                        pm_price = (pm["yes_price"] if bet_edge["best_side"] == "YES"
+                                    else pm["no_price"])
+                        # Recover bookmaker implied prob: edge = book_impl - pm_price
+                        book_impl = (bet_edge["yes_edge"] + pm["yes_price"]
+                                     if bet_edge["best_side"] == "YES"
+                                     else bet_edge["no_edge"] + pm["no_price"])
+                        token_id = (pm.get("yes_token_id") if bet_edge["best_side"] == "YES"
+                                    else pm.get("no_token_id"))
+                        maybe_place_bet(
+                            pm_id=pm["id"],
+                            question=pm["question"],
+                            event_name=f'{ev["home_team"]} vs {ev["away_team"]}',
+                            bookmaker=bet_mkt.get("bookmaker", ""),
+                            side=bet_edge["best_side"],
+                            pm_price=pm_price,
+                            book_implied=book_impl,
+                            edge_pct=bet_edge["best_edge"] * 100,
+                            token_id=token_id,
+                        )
 
     c.commit()
     c.close()
