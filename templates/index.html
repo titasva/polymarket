@@ -125,6 +125,50 @@
         </tbody>
       </table>
     </div>
+
+    <!-- ── Recover missing bet ─────────────────────────────────────────── -->
+    <details class="recover-panel" id="recover-panel">
+      <summary class="recover-summary">Recover missing bet</summary>
+      <div class="recover-body">
+        <p class="recover-hint">
+          If a bet was placed on Polymarket but not recorded in the database,
+          add it here so the settlement flow can detect the result and redeem winnings.
+        </p>
+        <div class="recover-form">
+          <label class="rf-field">
+            <span class="rf-label">Market ID <span class="rf-req">*</span></span>
+            <input type="text" id="rec-pm-id" placeholder="e.g. 0x1a2b3c…" />
+          </label>
+          <label class="rf-field">
+            <span class="rf-label">Order ID <span class="rf-req">*</span></span>
+            <input type="text" id="rec-order-id" placeholder="CLOB order ID or tx hash" />
+          </label>
+          <label class="rf-field rf-field-sm">
+            <span class="rf-label">Side <span class="rf-req">*</span></span>
+            <select id="rec-side">
+              <option value="YES">YES</option>
+              <option value="NO">NO</option>
+            </select>
+          </label>
+          <label class="rf-field rf-field-sm">
+            <span class="rf-label">Amount (USDC) <span class="rf-req">*</span></span>
+            <input type="number" id="rec-size" placeholder="e.g. 10.00" min="0.01" step="0.01" />
+          </label>
+          <label class="rf-field rf-field-sm">
+            <span class="rf-label">PM price (optional)</span>
+            <input type="number" id="rec-price" placeholder="0.00–1.00" min="0" max="1" step="0.001" />
+          </label>
+          <label class="rf-field rf-field-wide">
+            <span class="rf-label">Question (optional — fetched automatically if blank)</span>
+            <input type="text" id="rec-question" placeholder="Will … ?" />
+          </label>
+        </div>
+        <div class="recover-actions">
+          <button id="btn-recover" class="btn-primary">Add to database</button>
+          <span id="rec-status" class="rec-status"></span>
+        </div>
+      </div>
+    </details>
   </section>
 
   <!-- ── Markets ───────────────────────────────────────────────────────── -->

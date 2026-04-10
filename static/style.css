@@ -164,3 +164,23 @@ header{background:var(--surface);border-bottom:1px solid var(--border);height:va
 .sb-maps-to{font-size:.68rem;color:var(--dim);margin-top:2px}
 .banner-info{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.3);color:var(--blue)}
 .btn-danger-ghost{color:var(--dim);border-color:var(--border)}.btn-danger-ghost:hover{color:var(--red);border-color:var(--red);background:rgba(248,113,113,.06)}
+
+/* ── Recover missing bet panel ── */
+.recover-panel{border:1px solid var(--border);border-radius:var(--r);margin:16px 0 0;background:var(--surface)}
+.recover-summary{padding:10px 16px;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--mid);list-style:none;display:flex;align-items:center;gap:6px;user-select:none}
+.recover-summary::before{content:"▶";font-size:.65rem;color:var(--dim);transition:transform .15s}
+details[open] .recover-summary::before{transform:rotate(90deg)}
+.recover-body{padding:14px 18px 18px;border-top:1px solid var(--border)}
+.recover-hint{font-size:.78rem;color:var(--dim);margin-bottom:14px;line-height:1.5}
+.recover-form{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.rf-field{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:var(--mid);font-weight:500;flex:1;min-width:180px}
+.rf-field-sm{min-width:130px;flex:0 0 130px}
+.rf-field-wide{flex:2 1 340px}
+.rf-label{white-space:nowrap}
+.rf-req{color:var(--red)}
+.rf-field input,.rf-field select{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 9px;color:var(--text);font-size:.82rem;outline:none;transition:border-color .12s;width:100%;box-sizing:border-box}
+.rf-field input:focus,.rf-field select:focus{border-color:var(--green)}
+.recover-actions{display:flex;align-items:center;gap:12px}
+.rec-status{font-size:.8rem}
+.rec-ok{color:var(--green)}
+.rec-error{color:var(--red)}

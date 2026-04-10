@@ -6,8 +6,9 @@ Run:  python app.py
 import logging
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
+import requests
 from flask import Flask, jsonify, render_template, request
 
 from config import DB_PATH
@@ -204,6 +205,109 @@ def get_bets():
     ).fetchall()
     c.close()
     return jsonify([_d(r) for r in rows])
+
+
+# ── Manual bet recovery ────────────────────────────────────────────────────────
+
+@app.route("/api/bets/recover", methods=["POST"])
+def recover_bet():
+    """
+    Insert a manually-recovered bet into the DB so the settlement flow can
+    detect and redeem it.
+
+    Expected JSON body:
+        pm_id      – Polymarket market ID (required)
+        order_id   – CLOB order ID / tx hash (required)
+        side       – "YES" or "NO" (required)
+        size_usdc  – amount staked in USDC (required)
+        question   – market question text (optional; fetched from Gamma API if omitted)
+        pm_price   – PM price at time of bet (optional)
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    pm_id    = (body.get("pm_id") or "").strip()
+    order_id = (body.get("order_id") or "").strip()
+    side     = (body.get("side") or "").strip().upper()
+    size_usdc_raw = body.get("size_usdc")
+    question = (body.get("question") or "").strip()
+    pm_price_raw  = body.get("pm_price")
+
+    if not pm_id:
+        return jsonify({"error": "pm_id is required"}), 400
+    if not order_id:
+        return jsonify({"error": "order_id is required"}), 400
+    if side not in ("YES", "NO"):
+        return jsonify({"error": "side must be YES or NO"}), 400
+    try:
+        size_usdc = float(size_usdc_raw)
+        if size_usdc <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error": "size_usdc must be a positive number"}), 400
+
+    pm_price = None
+    if pm_price_raw is not None:
+        try:
+            pm_price = float(pm_price_raw)
+        except (TypeError, ValueError):
+            pass
+
+    # If no question provided, try to fetch it from the Gamma API
+    if not question:
+        try:
+            r = requests.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"id": pm_id},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data   = r.json()
+            market = data[0] if isinstance(data, list) else data
+            question = market.get("question", "")
+            if pm_price is None:
+                prices = market.get("outcomePrices") or []
+                if isinstance(prices, str):
+                    import json as _json
+                    try:
+                        prices = _json.loads(prices)
+                    except Exception:
+                        prices = []
+                if side == "YES" and len(prices) >= 1:
+                    try:
+                        pm_price = float(prices[0])
+                    except (TypeError, ValueError):
+                        pass
+                elif side == "NO" and len(prices) >= 2:
+                    try:
+                        pm_price = float(prices[1])
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as exc:
+            log.warning("Could not fetch market data for %s: %s", pm_id, exc)
+
+    now = datetime.now(timezone.utc).isoformat()
+    c = _conn()
+    try:
+        c.execute(
+            """INSERT INTO bets
+               (pm_id, question, event_name, bookmaker,
+                side, pm_price, book_implied, edge_pct,
+                size_usdc, token_id, order_id, status, placed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLACED', ?)""",
+            (pm_id, question, "", "manual",
+             side, pm_price, None, None,
+             size_usdc, None, order_id, now),
+        )
+        c.commit()
+        bet_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    except Exception as exc:
+        c.close()
+        log.error("recover_bet insert failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    c.close()
+
+    log.info("Recovered bet id=%d pm_id=%s order=%s side=%s size=%.2f",
+             bet_id, pm_id, order_id, side, size_usdc)
+    return jsonify({"status": "ok", "bet_id": bet_id, "question": question})
 
 
 # ── Markets ────────────────────────────────────────────────────────────────────
