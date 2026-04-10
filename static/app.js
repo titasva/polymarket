@@ -42,7 +42,11 @@ function fmtDate(iso) {
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (!r.ok) {
+    let msg = "HTTP " + r.status;
+    try { const j = await r.json(); if (j.error) msg = j.error; } catch (_) {}
+    throw new Error(msg);
+  }
   return r.json();
 }
 
@@ -358,10 +362,19 @@ document.getElementById("btn-recover").addEventListener("click", async function 
     statusEl.className = "rec-status rec-ok";
     statusEl.textContent = `Bet #${res.bet_id} added (${res.side}, ${res.size_usdc} USDC)${detail}. Run "Check settlement" to claim winnings.`;
     document.getElementById("rec-order-id").value = "";
+    // Reset overrides
+    document.getElementById("rec-pm-id").value = "";
+    document.getElementById("rec-side").value = "";
+    document.getElementById("rec-size").value = "";
+    document.getElementById("rec-price").value = "";
+    document.getElementById("rec-question").value = "";
     await loadBets();
   } catch (e) {
     statusEl.className = "rec-status rec-error";
-    statusEl.textContent = "Error: " + (e.message || "unknown error");
+    statusEl.textContent = (e.message || "unknown error");
+    // Auto-expand manual overrides so user can fill them in
+    const overrides = document.querySelector(".rec-overrides");
+    if (overrides) overrides.open = true;
   } finally {
     this.disabled = false;
   }

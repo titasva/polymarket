@@ -213,56 +213,87 @@ _CLOB_API   = "https://clob.polymarket.com"
 _GAMMA_API  = "https://gamma-api.polymarket.com"
 
 
-def _lookup_order(order_id: str) -> dict:
+def _lookup_order(order_id: str, private_key: str = "") -> dict:
     """
     Resolve bet details from a CLOB order ID.
 
-    Strategy:
-      1. Fetch filled trades for this order from the public CLOB trades endpoint
-         (tries maker_order_id then taker_order_id).
-      2. From the first trade's asset_id (token_id), look up the Gamma market.
-      3. Return a dict with: token_id, pm_id, question, side, size_usdc, pm_price.
+    Strategy 1 — authenticated (py-clob-client):
+      Uses the stored private key to call GET /orders/{order_id}.
+      Gives the full original order (original_size, price, asset_id, side).
 
+    Strategy 2 — public trades endpoint:
+      GET /trades?maker_order_id=… then ?taker_order_id=…
+      Gives filled trade data.
+
+    After getting token_id, resolves pm_id/question/YES-NO from Gamma API.
     Raises ValueError with a human-readable message on any failure.
     """
     import json as _json
 
-    CLOB_TRADES = f"{_CLOB_API}/trades"
-    trade = None
-    for param in ("maker_order_id", "taker_order_id"):
+    token_id  = ""
+    clob_side = "BUY"
+    size_usdc = 0.0
+    pm_price  = None
+
+    # ── Strategy 1: authenticated order lookup ────────────────────────────────
+    if private_key:
         try:
-            r = requests.get(CLOB_TRADES, params={param: order_id}, timeout=10)
-            r.raise_for_status()
-            data = r.json()
-            trades = data if isinstance(data, list) else data.get("data", [])
-            if trades:
-                trade = trades[0]
-                break
+            from py_clob_client.client import ClobClient
+            client = ClobClient(_CLOB_API, key=private_key, chain_id=137)
+            client.set_api_creds(client.create_or_derive_api_creds())
+            order = client.get_order(order_id)
+            if order:
+                token_id  = order.get("asset_id") or order.get("token_id") or ""
+                clob_side = (order.get("side") or "BUY").upper()
+                try:
+                    size_usdc = float(order.get("original_size") or order.get("size_matched") or 0)
+                except (TypeError, ValueError):
+                    size_usdc = 0.0
+                try:
+                    pm_price = float(order.get("price") or 0) or None
+                except (TypeError, ValueError):
+                    pm_price = None
+                log.debug("Order lookup via py-clob-client: token=%s side=%s size=%s",
+                          token_id[:16] if token_id else "?", clob_side, size_usdc)
         except Exception as exc:
-            log.debug("CLOB trades (%s=%s): %s", param, order_id, exc)
+            log.debug("py-clob-client order lookup failed: %s", exc)
 
-    if not trade:
-        raise ValueError(
-            "Could not find trades for this order ID on the CLOB. "
-            "The order may not be filled yet, or the ID is incorrect. "
-            "Please fill in the details manually."
-        )
-
-    token_id  = trade.get("asset_id") or trade.get("token_id") or ""
-    clob_side = (trade.get("side") or "BUY").upper()   # BUY or SELL from maker's view
-    try:
-        size_usdc = float(trade.get("size") or trade.get("matched_amount") or 0)
-    except (TypeError, ValueError):
-        size_usdc = 0.0
-    try:
-        pm_price = float(trade.get("price") or 0)
-    except (TypeError, ValueError):
-        pm_price = None
+    # ── Strategy 2: public /trades endpoint ───────────────────────────────────
+    if not token_id:
+        for param in ("maker_order_id", "taker_order_id"):
+            try:
+                r = requests.get(
+                    f"{_CLOB_API}/trades",
+                    params={param: order_id},
+                    timeout=10,
+                )
+                r.raise_for_status()
+                data   = r.json()
+                trades = data if isinstance(data, list) else data.get("data", [])
+                if trades:
+                    t = trades[0]
+                    token_id  = t.get("asset_id") or t.get("token_id") or ""
+                    clob_side = (t.get("side") or "BUY").upper()
+                    try:
+                        size_usdc = float(t.get("size") or t.get("matched_amount") or 0)
+                    except (TypeError, ValueError):
+                        size_usdc = 0.0
+                    try:
+                        pm_price = float(t.get("price") or 0) or None
+                    except (TypeError, ValueError):
+                        pm_price = None
+                    break
+            except Exception as exc:
+                log.debug("CLOB trades (%s=%s): %s", param, order_id, exc)
 
     if not token_id:
-        raise ValueError("Trade found but asset_id is missing. Please fill in details manually.")
+        raise ValueError(
+            "Could not look up this order on the CLOB API. "
+            "The order may not be filled yet, the ID may be incorrect, or "
+            "the API may be unreachable. Use the manual overrides below."
+        )
 
-    # Resolve market from token_id via Gamma API
+    # ── Resolve market from token_id via Gamma API ────────────────────────────
     try:
         r = requests.get(
             f"{_GAMMA_API}/markets",
@@ -356,7 +387,8 @@ def recover_bet():
     # ── Auto-resolve from CLOB + Gamma ────────────────────────────────────────
     resolved = {}
     try:
-        resolved = _lookup_order(order_id)
+        private_key = _get_setting("pm_private_key", "")
+        resolved = _lookup_order(order_id, private_key)
         log.info("order lookup resolved: %s", resolved)
     except ValueError as exc:
         # Only fatal if manual overrides don't supply the minimum required fields
