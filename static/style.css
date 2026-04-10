@@ -180,7 +180,11 @@ details[open] .recover-summary::before{transform:rotate(90deg)}
 .rf-req{color:var(--red)}
 .rf-field input,.rf-field select{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 9px;color:var(--text);font-size:.82rem;outline:none;transition:border-color .12s;width:100%;box-sizing:border-box}
 .rf-field input:focus,.rf-field select:focus{border-color:var(--green)}
-.recover-actions{display:flex;align-items:center;gap:12px}
+.recover-main{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.recover-actions{min-height:22px;margin-bottom:8px}
 .rec-status{font-size:.8rem}
 .rec-ok{color:var(--green)}
 .rec-error{color:var(--red)}
+.rec-overrides{margin-top:4px}
+.rec-overrides-summary{font-size:.75rem;color:var(--dim);cursor:pointer;user-select:none;padding:4px 0;list-style:none}
+.rec-overrides-summary:hover{color:var(--mid)}

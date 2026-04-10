@@ -209,80 +209,187 @@ def get_bets():
 
 # ── Manual bet recovery ────────────────────────────────────────────────────────
 
+_CLOB_API   = "https://clob.polymarket.com"
+_GAMMA_API  = "https://gamma-api.polymarket.com"
+
+
+def _lookup_order(order_id: str) -> dict:
+    """
+    Resolve bet details from a CLOB order ID.
+
+    Strategy:
+      1. Fetch filled trades for this order from the public CLOB trades endpoint
+         (tries maker_order_id then taker_order_id).
+      2. From the first trade's asset_id (token_id), look up the Gamma market.
+      3. Return a dict with: token_id, pm_id, question, side, size_usdc, pm_price.
+
+    Raises ValueError with a human-readable message on any failure.
+    """
+    import json as _json
+
+    CLOB_TRADES = f"{_CLOB_API}/trades"
+    trade = None
+    for param in ("maker_order_id", "taker_order_id"):
+        try:
+            r = requests.get(CLOB_TRADES, params={param: order_id}, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            trades = data if isinstance(data, list) else data.get("data", [])
+            if trades:
+                trade = trades[0]
+                break
+        except Exception as exc:
+            log.debug("CLOB trades (%s=%s): %s", param, order_id, exc)
+
+    if not trade:
+        raise ValueError(
+            "Could not find trades for this order ID on the CLOB. "
+            "The order may not be filled yet, or the ID is incorrect. "
+            "Please fill in the details manually."
+        )
+
+    token_id  = trade.get("asset_id") or trade.get("token_id") or ""
+    clob_side = (trade.get("side") or "BUY").upper()   # BUY or SELL from maker's view
+    try:
+        size_usdc = float(trade.get("size") or trade.get("matched_amount") or 0)
+    except (TypeError, ValueError):
+        size_usdc = 0.0
+    try:
+        pm_price = float(trade.get("price") or 0)
+    except (TypeError, ValueError):
+        pm_price = None
+
+    if not token_id:
+        raise ValueError("Trade found but asset_id is missing. Please fill in details manually.")
+
+    # Resolve market from token_id via Gamma API
+    try:
+        r = requests.get(
+            f"{_GAMMA_API}/markets",
+            params={"clob_token_ids": token_id},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data   = r.json()
+        market = data[0] if isinstance(data, list) else data
+    except Exception as exc:
+        raise ValueError(f"Could not resolve market for token {token_id[:16]}…: {exc}") from exc
+
+    if not market:
+        raise ValueError(f"No market found for token {token_id[:16]}…")
+
+    pm_id    = market.get("id", "")
+    question = market.get("question", "")
+
+    # Determine YES/NO from token_id position
+    yes_token = market.get("yes_token_id") or ""
+    no_token  = market.get("no_token_id")  or ""
+
+    # clobTokenIds may be a JSON string: ["YES_ID","NO_ID"]
+    if not yes_token or not no_token:
+        raw_ctids = market.get("clobTokenIds") or "[]"
+        if isinstance(raw_ctids, str):
+            try:
+                raw_ctids = _json.loads(raw_ctids)
+            except Exception:
+                raw_ctids = []
+        if isinstance(raw_ctids, list) and len(raw_ctids) >= 2:
+            yes_token = yes_token or raw_ctids[0]
+            no_token  = no_token  or raw_ctids[1]
+
+    if token_id == yes_token:
+        side = "YES"
+    elif token_id == no_token:
+        side = "NO"
+    else:
+        # Fallback: use clob BUY/SELL — BUY usually means YES token on PM
+        side = "YES" if clob_side == "BUY" else "NO"
+        log.warning("Token %s not matched to yes/no for market %s; defaulting side=%s",
+                    token_id[:16], pm_id, side)
+
+    # Fetch current price if we don't have one
+    if pm_price is None or pm_price == 0:
+        try:
+            prices = market.get("outcomePrices") or []
+            if isinstance(prices, str):
+                prices = _json.loads(prices)
+            idx = 0 if side == "YES" else 1
+            pm_price = float(prices[idx]) if len(prices) > idx else None
+        except Exception:
+            pm_price = None
+
+    return {
+        "token_id":  token_id,
+        "pm_id":     pm_id,
+        "question":  question,
+        "side":      side,
+        "size_usdc": size_usdc,
+        "pm_price":  pm_price,
+    }
+
+
 @app.route("/api/bets/recover", methods=["POST"])
 def recover_bet():
     """
     Insert a manually-recovered bet into the DB so the settlement flow can
     detect and redeem it.
 
-    Expected JSON body:
-        pm_id      – Polymarket market ID (required)
-        order_id   – CLOB order ID / tx hash (required)
-        side       – "YES" or "NO" (required)
-        size_usdc  – amount staked in USDC (required)
-        question   – market question text (optional; fetched from Gamma API if omitted)
-        pm_price   – PM price at time of bet (optional)
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    pm_id    = (body.get("pm_id") or "").strip()
-    order_id = (body.get("order_id") or "").strip()
-    side     = (body.get("side") or "").strip().upper()
-    size_usdc_raw = body.get("size_usdc")
-    question = (body.get("question") or "").strip()
-    pm_price_raw  = body.get("pm_price")
+    Minimal usage — only order_id required; everything else is auto-resolved:
+        { "order_id": "0x…" }
 
-    if not pm_id:
-        return jsonify({"error": "pm_id is required"}), 400
+    Manual overrides (all optional):
+        pm_id, side, size_usdc, question, pm_price
+    """
+    body     = request.get_json(force=True, silent=True) or {}
+    order_id = (body.get("order_id") or "").strip()
+
     if not order_id:
         return jsonify({"error": "order_id is required"}), 400
-    if side not in ("YES", "NO"):
-        return jsonify({"error": "side must be YES or NO"}), 400
+
+    # Optional manual overrides
+    pm_id_override    = (body.get("pm_id")    or "").strip()
+    side_override     = (body.get("side")      or "").strip().upper()
+    size_override_raw = body.get("size_usdc")
+    question_override = (body.get("question")  or "").strip()
+    price_override_raw = body.get("pm_price")
+
+    # ── Auto-resolve from CLOB + Gamma ────────────────────────────────────────
+    resolved = {}
     try:
-        size_usdc = float(size_usdc_raw)
+        resolved = _lookup_order(order_id)
+        log.info("order lookup resolved: %s", resolved)
+    except ValueError as exc:
+        # Only fatal if manual overrides don't supply the minimum required fields
+        if not (pm_id_override and side_override and size_override_raw):
+            return jsonify({"error": str(exc)}), 400
+        log.warning("Auto-lookup failed for order %s: %s (using manual overrides)", order_id, exc)
+
+    # ── Merge: manual overrides win ───────────────────────────────────────────
+    pm_id    = pm_id_override    or resolved.get("pm_id", "")
+    side     = side_override     or resolved.get("side", "")
+    question = question_override or resolved.get("question", "")
+    token_id = resolved.get("token_id", "")
+
+    try:
+        size_usdc = float(size_override_raw) if size_override_raw is not None else resolved.get("size_usdc", 0.0)
         if size_usdc <= 0:
             raise ValueError
     except (TypeError, ValueError):
         return jsonify({"error": "size_usdc must be a positive number"}), 400
 
     pm_price = None
-    if pm_price_raw is not None:
+    if price_override_raw is not None:
         try:
-            pm_price = float(pm_price_raw)
+            pm_price = float(price_override_raw)
         except (TypeError, ValueError):
             pass
+    if pm_price is None:
+        pm_price = resolved.get("pm_price")
 
-    # If no question provided, try to fetch it from the Gamma API
-    if not question:
-        try:
-            r = requests.get(
-                "https://gamma-api.polymarket.com/markets",
-                params={"id": pm_id},
-                timeout=10,
-            )
-            r.raise_for_status()
-            data   = r.json()
-            market = data[0] if isinstance(data, list) else data
-            question = market.get("question", "")
-            if pm_price is None:
-                prices = market.get("outcomePrices") or []
-                if isinstance(prices, str):
-                    import json as _json
-                    try:
-                        prices = _json.loads(prices)
-                    except Exception:
-                        prices = []
-                if side == "YES" and len(prices) >= 1:
-                    try:
-                        pm_price = float(prices[0])
-                    except (TypeError, ValueError):
-                        pass
-                elif side == "NO" and len(prices) >= 2:
-                    try:
-                        pm_price = float(prices[1])
-                    except (TypeError, ValueError):
-                        pass
-        except Exception as exc:
-            log.warning("Could not fetch market data for %s: %s", pm_id, exc)
+    if not pm_id:
+        return jsonify({"error": "Could not determine pm_id. Please provide it manually."}), 400
+    if side not in ("YES", "NO"):
+        return jsonify({"error": "Could not determine side (YES/NO). Please provide it manually."}), 400
 
     now = datetime.now(timezone.utc).isoformat()
     c = _conn()
@@ -295,7 +402,7 @@ def recover_bet():
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLACED', ?)""",
             (pm_id, question, "", "manual",
              side, pm_price, None, None,
-             size_usdc, None, order_id, now),
+             size_usdc, token_id, order_id, now),
         )
         c.commit()
         bet_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -307,7 +414,8 @@ def recover_bet():
 
     log.info("Recovered bet id=%d pm_id=%s order=%s side=%s size=%.2f",
              bet_id, pm_id, order_id, side, size_usdc)
-    return jsonify({"status": "ok", "bet_id": bet_id, "question": question})
+    return jsonify({"status": "ok", "bet_id": bet_id,
+                    "question": question, "side": side, "size_usdc": size_usdc})
 
 
 # ── Markets ────────────────────────────────────────────────────────────────────

@@ -131,42 +131,54 @@
       <summary class="recover-summary">Recover missing bet</summary>
       <div class="recover-body">
         <p class="recover-hint">
-          If a bet was placed on Polymarket but not recorded in the database,
-          add it here so the settlement flow can detect the result and redeem winnings.
+          If a bet was placed on Polymarket but not recorded here, paste the order ID
+          and click <strong>Recover</strong>. Market, side, and amount are resolved
+          automatically from the CLOB. Run <em>Check settlement</em> afterwards to
+          claim winnings.
         </p>
-        <div class="recover-form">
-          <label class="rf-field">
-            <span class="rf-label">Market ID <span class="rf-req">*</span></span>
-            <input type="text" id="rec-pm-id" placeholder="e.g. 0x1a2b3c…" />
-          </label>
-          <label class="rf-field">
+
+        <!-- Primary: order ID only -->
+        <div class="recover-main">
+          <label class="rf-field" style="flex:1;max-width:480px">
             <span class="rf-label">Order ID <span class="rf-req">*</span></span>
-            <input type="text" id="rec-order-id" placeholder="CLOB order ID or tx hash" />
+            <input type="text" id="rec-order-id" placeholder="0x…" autocomplete="off" spellcheck="false" />
           </label>
-          <label class="rf-field rf-field-sm">
-            <span class="rf-label">Side <span class="rf-req">*</span></span>
-            <select id="rec-side">
-              <option value="YES">YES</option>
-              <option value="NO">NO</option>
-            </select>
-          </label>
-          <label class="rf-field rf-field-sm">
-            <span class="rf-label">Amount (USDC) <span class="rf-req">*</span></span>
-            <input type="number" id="rec-size" placeholder="e.g. 10.00" min="0.01" step="0.01" />
-          </label>
-          <label class="rf-field rf-field-sm">
-            <span class="rf-label">PM price (optional)</span>
-            <input type="number" id="rec-price" placeholder="0.00–1.00" min="0" max="1" step="0.001" />
-          </label>
-          <label class="rf-field rf-field-wide">
-            <span class="rf-label">Question (optional — fetched automatically if blank)</span>
-            <input type="text" id="rec-question" placeholder="Will … ?" />
-          </label>
+          <button id="btn-recover" class="btn-primary" style="align-self:flex-end">Recover</button>
         </div>
         <div class="recover-actions">
-          <button id="btn-recover" class="btn-primary">Add to database</button>
           <span id="rec-status" class="rec-status"></span>
         </div>
+
+        <!-- Optional overrides (collapsed) -->
+        <details class="rec-overrides">
+          <summary class="rec-overrides-summary">Manual overrides (if auto-lookup fails)</summary>
+          <div class="recover-form" style="margin-top:10px">
+            <label class="rf-field">
+              <span class="rf-label">Market ID</span>
+              <input type="text" id="rec-pm-id" placeholder="e.g. 0x1a2b3c…" />
+            </label>
+            <label class="rf-field rf-field-sm">
+              <span class="rf-label">Side</span>
+              <select id="rec-side">
+                <option value="">— auto —</option>
+                <option value="YES">YES</option>
+                <option value="NO">NO</option>
+              </select>
+            </label>
+            <label class="rf-field rf-field-sm">
+              <span class="rf-label">Amount (USDC)</span>
+              <input type="number" id="rec-size" placeholder="e.g. 10.00" min="0.01" step="0.01" />
+            </label>
+            <label class="rf-field rf-field-sm">
+              <span class="rf-label">PM price</span>
+              <input type="number" id="rec-price" placeholder="0.00–1.00" min="0" max="1" step="0.001" />
+            </label>
+            <label class="rf-field rf-field-wide">
+              <span class="rf-label">Question</span>
+              <input type="text" id="rec-question" placeholder="Will … ?" />
+            </label>
+          </div>
+        </details>
       </div>
     </details>
   </section>

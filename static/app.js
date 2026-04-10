@@ -325,36 +325,39 @@ document.getElementById("btn-settle").addEventListener("click", async function (
 /* ── Recover missing bet ─────────────────────────────────────────────────── */
 
 document.getElementById("btn-recover").addEventListener("click", async function () {
-  const pmId    = document.getElementById("rec-pm-id").value.trim();
-  const orderId = document.getElementById("rec-order-id").value.trim();
-  const side    = document.getElementById("rec-side").value;
-  const size    = parseFloat(document.getElementById("rec-size").value);
-  const priceRaw = document.getElementById("rec-price").value.trim();
-  const question = document.getElementById("rec-question").value.trim();
+  const orderId  = document.getElementById("rec-order-id").value.trim();
   const statusEl = document.getElementById("rec-status");
 
-  if (!pmId || !orderId || !side || isNaN(size) || size <= 0) {
+  if (!orderId) {
     statusEl.className = "rec-status rec-error";
-    statusEl.textContent = "Please fill in all required fields.";
+    statusEl.textContent = "Please enter an Order ID.";
     return;
   }
 
   this.disabled = true;
   statusEl.className = "rec-status";
-  statusEl.innerHTML = `<span class="spinner"></span>Adding…`;
+  statusEl.innerHTML = `<span class="spinner"></span>Looking up order…`;
 
-  const body = { pm_id: pmId, order_id: orderId, side, size_usdc: size };
-  if (priceRaw)  body.pm_price = parseFloat(priceRaw);
-  if (question)  body.question = question;
+  // Build body — order_id required; include overrides only if filled in
+  const body = { order_id: orderId };
+  const pmId    = document.getElementById("rec-pm-id").value.trim();
+  const side    = document.getElementById("rec-side").value;
+  const sizeRaw = document.getElementById("rec-size").value.trim();
+  const priceRaw = document.getElementById("rec-price").value.trim();
+  const question = document.getElementById("rec-question").value.trim();
+
+  if (pmId)             body.pm_id    = pmId;
+  if (side)             body.side     = side;
+  if (sizeRaw)          body.size_usdc = parseFloat(sizeRaw);
+  if (priceRaw)         body.pm_price  = parseFloat(priceRaw);
+  if (question)         body.question  = question;
 
   try {
     const res = await api("/api/bets/recover", { method: "POST", body: JSON.stringify(body) });
+    const detail = res.question ? ` — ${res.question.slice(0, 80)}` : "";
     statusEl.className = "rec-status rec-ok";
-    statusEl.textContent = `Bet #${res.bet_id} added${res.question ? ': ' + res.question.slice(0, 80) : ''}. Run "Check settlement" to claim winnings.`;
-    // Clear form
-    ["rec-pm-id","rec-order-id","rec-size","rec-price","rec-question"].forEach(id => {
-      document.getElementById(id).value = "";
-    });
+    statusEl.textContent = `Bet #${res.bet_id} added (${res.side}, ${res.size_usdc} USDC)${detail}. Run "Check settlement" to claim winnings.`;
+    document.getElementById("rec-order-id").value = "";
     await loadBets();
   } catch (e) {
     statusEl.className = "rec-status rec-error";
